@@ -3,6 +3,7 @@ import os
 import time
 import math
 import random
+import json
 import numpy as np
 import torch
 import torch.nn as nn
@@ -47,6 +48,14 @@ _leaky = F.leaky_relu
 # perché il test della pipeline UTSP deve essere un blocco unico: di default usa N_VALIDATION_SCENARIOS.
 UTSP_TEST_SCENARIOS = int(os.environ.get("UTSP_TEST_SCENARIOS", str(N_VALIDATION_SCENARIOS)))
 UTSP_TEST_SEED = int(os.environ.get("UTSP_TEST_SEED", str(VALIDATION_SEED)))
+
+# Gestione artefatti training UTSP.
+# - default: training normale + salvataggio automatico
+# - TESI_REUSE_UTSP_TRAIN=1: carica modello già salvato, se compatibile
+# - TESI_UTSP_TEST_ONLY=1: carica modello già salvato e fa solo nuovi test
+UTSP_REUSE_TRAIN = os.environ.get("TESI_REUSE_UTSP_TRAIN", "0").strip() == "1"
+UTSP_TEST_ONLY = os.environ.get("TESI_UTSP_TEST_ONLY", "0").strip() == "1"
+UTSP_TRAIN_NAME = os.environ.get("TESI_UTSP_TRAIN_NAME", "").strip()
 
 
 # Prende il grafo (matrice di adiacenza W) e "propaga" le feature dei nodi attraverso i vicini.
@@ -227,6 +236,178 @@ def _build_adj_robust_floor( dist_stack, tau=UTSP2_TEMP_SCALE,
     # soglia minima morbida: ogni arco fuori diagonale resta visibile
     adj = eps + (1.0 - eps) * adj
     return adj
+
+
+
+
+def _json_safe(obj):
+    """Converte oggetti numpy/torch in tipi serializzabili JSON."""
+    if isinstance(obj, torch.Tensor):
+        obj = obj.detach().cpu()
+        if obj.numel() == 1:
+            return float(obj.item())
+        return obj.tolist()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, set):
+        return sorted(_json_safe(v) for v in obj)
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    return str(obj)
+
+
+def _canon_edge_local(i, j):
+    return (i, j) if i <= j else (j, i)
+
+
+def _edge_metadata(I, p, C):
+    rows = []
+    for i, j in sorted({_canon_edge_local(i, j) for (i, j) in I}):
+        rows.append({
+            "edge": [i, j],
+            "p": float(get_edge_value(p, i, j)),
+            "C": float(get_edge_value(C, i, j)),
+        })
+    return rows
+
+
+def _artifact_exp_name(exp_name):
+    return UTSP_TRAIN_NAME if UTSP_TRAIN_NAME else str(exp_name)
+
+
+def _utsp_train_dir(exp_name):
+    name = _artifact_exp_name(exp_name)
+    train_dir = os.path.join(OUTPUT_DIR, "train", name)
+    os.makedirs(train_dir, exist_ok=True)
+    return train_dir
+
+
+def _utsp_train_paths(exp_name):
+    train_dir = _utsp_train_dir(exp_name)
+    return {
+        "dir": train_dir,
+        "model": os.path.join(train_dir, "utsp_model.pt"),
+        "history": os.path.join(train_dir, "utsp_history.json"),
+        "metadata": os.path.join(train_dir, "utsp_metadata.json"),
+    }
+
+
+def _save_utsp_train_artifact(
+    exp_name, model, history, nodes, scenario_ids,
+    temperature, dist_scale, I, p, C,
+):
+    paths = _utsp_train_paths(exp_name)
+
+    metadata = {
+        "exp_name": str(exp_name),
+        "artifact_name": _artifact_exp_name(exp_name),
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "output_dir": str(OUTPUT_DIR),
+        "n_nodes": int(len(nodes)),
+        "nodes": list(nodes),
+        "n_training_scenarios": int(len(scenario_ids)),
+        "utsp_batch_size": int(UTSP_BATCH_SIZE),
+        "utsp_training_seed": int(UTSP_TRAINING_SEED),
+        "utsp2_hidden": int(UTSP2_HIDDEN),
+        "utsp2_nlayers": int(UTSP2_NLAYERS),
+        "utsp2_epochs": int(UTSP2_EPOCHS),
+        "utsp2_lr": float(UTSP2_LR),
+        "temperature": float(temperature),
+        "dist_scale": float(dist_scale),
+        "I_edges": _edge_metadata(I, p, C),
+    }
+
+    payload = {
+        "model_state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()},
+        "history": _json_safe(history),
+        "metadata": metadata,
+    }
+
+    torch.save(payload, paths["model"])
+
+    with open(paths["history"], "w", encoding="utf-8") as f:
+        json.dump(_json_safe(history), f, indent=2)
+
+    with open(paths["metadata"], "w", encoding="utf-8") as f:
+        json.dump(_json_safe(metadata), f, indent=2)
+
+    print("\n  Artefatto training UTSP salvato:")
+    print(f"    model    = {paths['model']}")
+    print(f"    history  = {paths['history']}")
+    print(f"    metadata = {paths['metadata']}")
+
+
+def _assert_utsp_artifact_compatible(metadata, nodes, I, p, C):
+    errors = []
+
+    if int(metadata.get("n_nodes", -1)) != len(nodes):
+        errors.append(
+            f"n_nodes salvato={metadata.get('n_nodes')} corrente={len(nodes)}"
+        )
+
+    if list(metadata.get("nodes", [])) != list(nodes):
+        errors.append("lista nodi diversa")
+
+    if int(metadata.get("utsp2_hidden", -1)) != int(UTSP2_HIDDEN):
+        errors.append("UTSP2_HIDDEN diverso")
+
+    if int(metadata.get("utsp2_nlayers", -1)) != int(UTSP2_NLAYERS):
+        errors.append("UTSP2_NLAYERS diverso")
+
+    saved_edges = metadata.get("I_edges", [])
+    current_edges = _edge_metadata(I, p, C)
+    if saved_edges != current_edges:
+        errors.append("I/p/C diversi rispetto al modello salvato")
+
+    if errors:
+        raise ValueError(
+            "Artefatto UTSP incompatibile:\n  - " + "\n  - ".join(errors)
+        )
+
+
+def _load_utsp_train_artifact(exp_name, nodes, coords, I, p, C, device):
+    paths = _utsp_train_paths(exp_name)
+
+    if not os.path.exists(paths["model"]):
+        raise FileNotFoundError(paths["model"])
+
+    payload = torch.load(paths["model"], map_location=device)
+    metadata = payload.get("metadata", {})
+    _assert_utsp_artifact_compatible(metadata, nodes, I, p, C)
+
+    model = UTSP_GNN(len(nodes), UTSP2_HIDDEN, UTSP2_NLAYERS).to(device)
+    model.load_state_dict(payload["model_state_dict"])
+    model.eval()
+
+    if os.path.exists(paths["history"]):
+        with open(paths["history"], "r", encoding="utf-8") as f:
+            history = json.load(f)
+    else:
+        history = payload.get("history", {"loss": [float("nan")], "components": []})
+
+    if "loss" not in history or not history["loss"]:
+        history["loss"] = [float("nan")]
+
+    xy = _normalize_coords(nodes, coords, device)
+    temperature = float(metadata["temperature"])
+    dist_scale = float(metadata["dist_scale"])
+
+    print("\n  Artefatto training UTSP caricato:")
+    print(f"    model       = {paths['model']}")
+    print(f"    temperature = {temperature:.6f}")
+    print(f"    dist_scale  = {dist_scale:.6f}")
+    print(f"    n_nodes     = {metadata.get('n_nodes')}")
+
+    return model, history, xy, temperature, dist_scale, metadata
+
 
 
 # Addestro la GNN su batch di scenari
@@ -1164,6 +1345,37 @@ def run_esperimento_B_UTSP(
     STO_train = res_B["STO"]
     EEV_train = res_B["EEV"]
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if UTSP_TEST_ONLY:
+        print("\n  Modalità TESI_UTSP_TEST_ONLY=1: carico training salvato e genero solo nuovi test.")
+        model, history, xy_single, temperature, dist_scale, train_metadata = _load_utsp_train_artifact(
+            exp_name, nodes, coords, I, p, C, device
+        )
+        ls_out = _run_utsp_test_only_branch(
+            nodes=nodes,
+            coords=coords,
+            E=E,
+            root=root,
+            env=env,
+            res_B=res_B,
+            model=model,
+            xy=xy_single,
+            dist_scale=dist_scale,
+            temperature=temperature,
+            device=device,
+            base_dist=base_dist,
+            scenario_kwargs=scenario_kwargs,
+            exp_name=exp_name,
+            history=history,
+        )
+        return {
+            "model": model,
+            "history": history,
+            "local_search": ls_out,
+            "loaded_train_artifact": train_metadata,
+        }
+
     # ── Scenari UTSP training: N_TRAINING_SCENARIOS_UTSP / UTSP_BATCH_SIZE batch ──
     batches_utsp = generate_scenario_batches(
         nodes, E, base_dist, I, frequent_arcs,
@@ -1218,7 +1430,6 @@ def run_esperimento_B_UTSP(
     }
 
     n = len(nodes)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     I_mask, p_mat, C_mat, node_idx = build_I_tensors(I, nodes, p, C, device)
 
@@ -1241,19 +1452,56 @@ def run_esperimento_B_UTSP(
     print(f"  Scenari B per grafici/benchmark = {len(scenario_ids_B)}")
     print(f"  I = {I}")
 
-    (model, history, adj_stack, dist_model,
-     xy_tile, probs_t, temperature, dist_scale) = _train_utsp_2stage(
-        nodes,
-        coords,
-        scenario_ids_utsp,
-        results_utsp,
-        scenario_probs_utsp,
-        I_mask,
-        p_mat,
-        C_mat,
-        device,
-        batches=batches_utsp,
-    )
+    train_loaded = False
+
+    if UTSP_REUSE_TRAIN:
+        try:
+            model, history, xy_single, temperature, dist_scale, train_metadata = _load_utsp_train_artifact(
+                exp_name, nodes, coords, I, p, C, device
+            )
+
+            # Ricostruisco tensori train solo per diagnostiche/plot del flusso completo.
+            xy_tile, _, dist_model, _, _ = _build_input_tensors(
+                scenario_ids_utsp, results_utsp, nodes, coords, device
+            )
+            adj_stack = torch.exp(-dist_model / max(float(temperature), 1e-9))
+            probs_t = torch.tensor(
+                [scenario_probs_utsp[sid] for sid in scenario_ids_utsp],
+                dtype=torch.float32, device=device,
+            )
+            train_loaded = True
+        except FileNotFoundError as exc:
+            print(f"\n  Artefatto UTSP non trovato: {exc}")
+            print("  Eseguo training normale e salvo il nuovo artefatto.")
+            train_loaded = False
+
+    if not train_loaded:
+        (model, history, adj_stack, dist_model,
+         xy_tile, probs_t, temperature, dist_scale) = _train_utsp_2stage(
+            nodes,
+            coords,
+            scenario_ids_utsp,
+            results_utsp,
+            scenario_probs_utsp,
+            I_mask,
+            p_mat,
+            C_mat,
+            device,
+            batches=batches_utsp,
+        )
+
+        _save_utsp_train_artifact(
+            exp_name=exp_name,
+            model=model,
+            history=history,
+            nodes=nodes,
+            scenario_ids=scenario_ids_utsp,
+            temperature=temperature,
+            dist_scale=dist_scale,
+            I=I,
+            p=p,
+            C=C,
+        )
 
     # Decode mantenuto solo come diagnostica della heatmap; la policy Gurobi non viene più usata.
     x_utsp, x_scores, H_list, T_batch = _decode_policy(
@@ -1785,6 +2033,217 @@ def _write_utsp_pipeline_stats_file(
     with open(stats_file, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     print(f"  → Diagnostica pipeline UTSP scritta in: {stats_file}")
+
+
+
+
+def _write_utsp_test_only_stats_file(
+    exp_name, scenario_ids, x_test,
+    test_pre_costs, test_pre_tc, test_pre_pc, test_pre_tours,
+    test_post_costs, test_post_tc, test_post_pc, test_post_tours,
+    PI_test, PI_pren_test, UTSP_LS_test, STO_test, EEV_test,
+    gap_ls_sto, gap_ls_eev, gap_ls_pi,
+    history, temperature, dist_scale,
+):
+    def fmt(x):
+        if x is None:
+            return "N/A"
+        try:
+            return f"{float(x):.6f}"
+        except Exception:
+            return str(x)
+
+    lines = [
+        "=" * 90,
+        "DIAGNOSTICA UTSP TEST-ONLY",
+        "=" * 90,
+        "",
+        "Modalità:",
+        "  TESI_UTSP_TEST_ONLY=1",
+        "  training GNN caricato da OUTPUT_DIR/train/",
+        "  nessuna rigenerazione degli scenari train UTSP",
+        "",
+        f"Scenari test       = {len(scenario_ids)}",
+        f"Seed test          = {UTSP_TEST_SEED}",
+        f"x_test             = {sorted(x_test or [])}",
+        f"Temperatura T      = {fmt(temperature)}",
+        f"dist_scale         = {fmt(dist_scale)}",
+        "",
+        "RISULTATI TEST",
+        f"  PI test          = {fmt(PI_test)}",
+        f"  PI+pren test     = {fmt(PI_pren_test)}",
+        f"  UTSP test        = {fmt(UTSP_LS_test)}",
+        f"  STO test         = {fmt(STO_test)}",
+        f"  EEV test         = {fmt(EEV_test)}",
+        f"  Gap UTSP vs STO  = {fmt(gap_ls_sto)}%",
+        f"  Gap UTSP vs EEV  = {fmt(gap_ls_eev)}%",
+        f"  Gap UTSP vs PI   = {fmt(gap_ls_pi)}%",
+        "",
+        "TRAINING CARICATO",
+        f"  Loss iniziale    = {fmt(history['loss'][0]) if history and 'loss' in history and history['loss'] else 'N/A'}",
+        f"  Loss finale      = {fmt(history['loss'][-1]) if history and 'loss' in history and history['loss'] else 'N/A'}",
+        "",
+        "COSTI TEST SCENARIO PER SCENARIO",
+        f"  {'scenario':>8} | {'pre_total':>12} | {'post_total':>12} | {'post_perc':>12} | {'post_multa':>12} | tour post",
+    ]
+
+    for sid in scenario_ids:
+        lines.append(
+            f"  {str(sid):>8} | {fmt(test_pre_costs.get(sid)):>12} | "
+            f"{fmt(test_post_costs.get(sid)):>12} | {fmt(test_post_tc.get(sid)):>12} | "
+            f"{fmt(test_post_pc.get(sid)):>12} | {test_post_tours.get(sid, [])}"
+        )
+
+    lines.append("=" * 90)
+
+    grafici_dir = os.path.join(OUTPUT_DIR, "grafici")
+    os.makedirs(grafici_dir, exist_ok=True)
+    stats_file = os.path.join(grafici_dir, f"{exp_name}_test_only_stats.txt")
+    with open(stats_file, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+    print(f"  → Diagnostica UTSP test-only scritta in: {stats_file}")
+
+
+def _run_utsp_test_only_branch(
+    nodes, coords, E, root, env, res_B,
+    model, xy, dist_scale, temperature, device, base_dist,
+    scenario_kwargs=None, exp_name="espB_UTSP_LS", history=None,
+):
+    print("\n" + "=" * 70)
+    print("ESPERIMENTO B — UTSP TEST-ONLY DA TRAINING SALVATO")
+
+    scenario_kwargs = dict(scenario_kwargs or {})
+    I = res_B["I"]
+    p = res_B["p"]
+    C = res_B["C"]
+    frequent_arcs = res_B["frequent_arcs"]
+
+    print(f"  scenari test UTSP = {UTSP_TEST_SCENARIOS}  seed={UTSP_TEST_SEED}")
+    results_test, scenario_ids_test, scenario_probs_test = _generate_one_block_test_scenarios(
+        nodes, E, base_dist, I, frequent_arcs, root, env, p, C,
+        n_scenarios=UTSP_TEST_SCENARIOS,
+        seed=UTSP_TEST_SEED,
+        scenario_kwargs=scenario_kwargs,
+    )
+
+    H_test = _build_heatmaps_for_scenarios(
+        model, xy, nodes, results_test, scenario_ids_test, dist_scale, temperature, device
+    )
+
+    print("\n  Test pre-booking: LS senza prenotazioni e senza multe ...")
+    (test_pre_costs, test_pre_tc, test_pre_pc,
+     test_pre_tours, test_pre_solutions, UTSP_test_pre) = _run_ls_on_scenarios(
+        model, xy, nodes, root, I, p, C,
+        results_test, scenario_ids_test, scenario_probs_test,
+        H_list_precomputed=H_test,
+        dist_scale=dist_scale, temperature=temperature,
+        device=device, x_ls=[], label="test_only_pre_booking",
+        apply_penalties=False,
+    )
+
+    x_test = _compute_bookings_from_tours(test_pre_tours, scenario_ids_test, nodes, I, p, C)
+    reserv_test = sum(get_edge_value(p, i, j) for (i, j) in x_test)
+    print(f"  Costo prenotazione deciso da test: {reserv_test:.4f}")
+
+    print("\n  Test post-booking: LS sugli stessi scenari con costi aggiornati ...")
+    (test_post_costs, test_post_tc, test_post_pc,
+     test_post_tours, test_post_solutions, UTSP_LS_test) = _run_ls_on_scenarios(
+        model, xy, nodes, root, I, p, C,
+        results_test, scenario_ids_test, scenario_probs_test,
+        H_list_precomputed=H_test,
+        dist_scale=dist_scale, temperature=temperature,
+        device=device, x_ls=x_test, label="test_only_post_booking",
+        apply_penalties=True,
+    )
+
+    pi_test_d = _compute_exact_free_costs_from_results(results_test, scenario_ids_test)
+    PI_test = _scenario_mean(pi_test_d, scenario_ids_test, scenario_probs_test)
+    pi_pren_test_d = _compute_pi_with_booking_costs_local(results_test, scenario_ids_test, I, p)
+    PI_pren_test = _scenario_mean(pi_pren_test_d, scenario_ids_test, scenario_probs_test)
+
+    try:
+        test_bench = validate_policies(
+            nodes, E, base_dist, root, env, I, p, C,
+            res_B["x_used_sto"], res_B["x_ev"],
+            frequent_arcs, UTSP_TEST_SCENARIOS,
+            N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC,
+            exp_name=exp_name,
+            **scenario_kwargs,
+        )
+        STO_test = test_bench.get("STO_val", float("nan"))
+        EEV_test = test_bench.get("EEV_val", float("nan"))
+
+        if "eev_costs" in test_bench and "sto_costs" in test_bench:
+            plot_cost_distributions(
+                test_bench["eev_costs"], test_bench["sto_costs"], test_post_costs,
+                exp_name, "test_only",
+            )
+    except Exception as exc:
+        print(f"  Attenzione: validate_policies per STO/EEV test-only non riuscita: {exc}")
+        STO_test = float("nan")
+        EEV_test = float("nan")
+
+    gap_ls_sto = (UTSP_LS_test - STO_test) / abs(STO_test) * 100 if STO_test and np.isfinite(STO_test) else float("nan")
+    gap_ls_eev = (UTSP_LS_test - EEV_test) / abs(EEV_test) * 100 if EEV_test and np.isfinite(EEV_test) else float("nan")
+    gap_ls_pi = (UTSP_LS_test - PI_test) / abs(PI_test) * 100 if PI_test and np.isfinite(PI_test) else float("nan")
+
+    print("\n" + "─" * 65)
+    print("RIEPILOGO UTSP TEST-ONLY")
+    print(f"  x_test = {sorted(x_test)}")
+    print(f"  PI test        = {PI_test:.4f}")
+    print(f"  PI+pren test   = {PI_pren_test:.4f}")
+    print(f"  UTSP test      = {UTSP_LS_test:.4f}")
+    print(f"  STO test       = {STO_test:.4f}")
+    print(f"  EEV test       = {EEV_test:.4f}")
+    print(f"  Gap UTSP vs STO = {gap_ls_sto:+.2f}%")
+    print(f"  Gap UTSP vs EEV = {gap_ls_eev:+.2f}%")
+    print(f"  Gap UTSP vs PI  = {gap_ls_pi:+.2f}%")
+    print("─" * 65)
+
+    _write_utsp_test_only_stats_file(
+        exp_name=exp_name,
+        scenario_ids=scenario_ids_test,
+        x_test=x_test,
+        test_pre_costs=test_pre_costs,
+        test_pre_tc=test_pre_tc,
+        test_pre_pc=test_pre_pc,
+        test_pre_tours=test_pre_tours,
+        test_post_costs=test_post_costs,
+        test_post_tc=test_post_tc,
+        test_post_pc=test_post_pc,
+        test_post_tours=test_post_tours,
+        PI_test=PI_test,
+        PI_pren_test=PI_pren_test,
+        UTSP_LS_test=UTSP_LS_test,
+        STO_test=STO_test,
+        EEV_test=EEV_test,
+        gap_ls_sto=gap_ls_sto,
+        gap_ls_eev=gap_ls_eev,
+        gap_ls_pi=gap_ls_pi,
+        history=history or {"loss": []},
+        temperature=temperature,
+        dist_scale=dist_scale,
+    )
+
+    return {
+        "x_test": x_test,
+        "results_test": results_test,
+        "scenario_ids_test": scenario_ids_test,
+        "scenario_probs_test": scenario_probs_test,
+        "costs_test_pre": test_pre_costs,
+        "costs_test_post": test_post_costs,
+        "tours_test_post": test_post_tours,
+        "UTSP_test_pre": UTSP_test_pre,
+        "UTSP_LS_test": UTSP_LS_test,
+        "PI_test": PI_test,
+        "PI_pren_test": PI_pren_test,
+        "STO_test": STO_test,
+        "EEV_test": EEV_test,
+        "gap_ls_sto": gap_ls_sto,
+        "gap_ls_eev": gap_ls_eev,
+        "gap_ls_pi": gap_ls_pi,
+    }
 
 
 def _run_local_search_branch(
