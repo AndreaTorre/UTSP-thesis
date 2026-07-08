@@ -1,122 +1,121 @@
 #!/bin/bash
-# Lancia tutta la pipeline PERT con dipendenze SLURM automatiche.
-# Uso base:
-#   bash run_tutto.sh
-#
-# Uso con istanza specifica:
-#   TESI_DATA_FILE=/home/atorre/UTSP/unione/git/UTSP/data/pert/nodi_25.json \
-#   TESI_OUTPUT_DIR=/home/atorre/UTSP/unione/git/UTSP/PERT/RISULTATI_25 \
-#   bash run_tutto.sh
+# PERT/run_tutto.sh — Pipeline parallela esperimento B per PERT
+# Uso:
+#   bash run_tutto.sh 15
+#   bash run_tutto.sh 25
+#   bash run_tutto.sh 40
 
-set -e
+set -euo pipefail
 
-cd /home/atorre/UTSP/unione/git/UTSP/PERT
+N=${1:-${TESI_N_NODES:-40}}
 
-export TESI_EXPERIMENT=PERT
-export TESI_N_NODES=${1:-${TESI_N_NODES:-40}}
-export TESI_OUTPUT_DIR=/home/atorre/UTSP/unione/git/UTSP/PERT/RISULTATI_${TESI_N_NODES}
+if [[ "$N" != "15" && "$N" != "25" && "$N" != "40" ]]; then
+  echo "Errore: N deve essere 15, 25 oppure 40. Valore ricevuto: $N"
+  exit 1
+fi
 
-export PYTHONUNBUFFERED=1
-export PYTHONPATH=/home/atorre/UTSP/unione/git/UTSP/common:$PYTHONPATH
+ROOT=/home/atorre/UTSP/unione/git/UTSP
+PERT=$ROOT/PERT
+VENV=$ROOT/venv
+PYPATH=$ROOT/common
 
-mkdir -p "$TESI_OUTPUT_DIR/output"
-mkdir -p "$TESI_OUTPUT_DIR/grafici"
-mkdir -p "$TESI_OUTPUT_DIR/checkpoint"
-mkdir -p "$TESI_OUTPUT_DIR/pkl"
+OUTPUT=$PERT/RISULTATI_$N/output
+mkdir -p "$OUTPUT"
+mkdir -p "$PERT/RISULTATI_$N/grafici"
+mkdir -p "$PERT/RISULTATI_$N/checkpoint"
+mkdir -p "$PERT/RISULTATI_$N/pkl"
 
-echo "=== Pipeline parallela Esperimento B PERT ==="
-echo "TESI_N_NODES=$TESI_N_NODES"
-echo "TESI_OUTPUT_DIR=$TESI_OUTPUT_DIR"
+COMMON_ARGS="
+  --output=$OUTPUT/output_%x_%j.txt
+  --error=$OUTPUT/error_%x_%j.txt
+  --nodes=1
+  --ntasks=1
+"
 
-SETUP=$(sbatch --parsable \
-  --output="$TESI_OUTPUT_DIR/output/output_setup_%j.txt" \
-  --error="$TESI_OUTPUT_DIR/output/error_setup_%j.txt" \
-  --export=ALL,TESI_EXPERIMENT=PERT,TESI_N_NODES="$TESI_N_NODES" \
-  run_0_setup.sh)
-echo "Setup:    job $SETUP"
+wrap_cmd() {
+  FASE=$1
+  echo "
+    cd $ROOT
 
-PI=$(sbatch --parsable \
-  --dependency=afterok:$SETUP \
-  --output="$TESI_OUTPUT_DIR/output/output_pi_%j.txt" \
-  --error="$TESI_OUTPUT_DIR/output/error_pi_%j.txt" \
-  --export=ALL,TESI_EXPERIMENT=PERT,TESI_N_NODES="$TESI_N_NODES" <<'EOF_PI'
-#!/bin/bash
-#SBATCH --job-name=B_pi
-#SBATCH --time=06:00:00
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
+    module load python
+    module load gurobi
 
-module load python
-module load gurobi
+    source $VENV/bin/activate
 
-cd /home/atorre/UTSP/unione/git/UTSP/PERT
-source /home/atorre/UTSP/unione/git/UTSP/venv/bin/activate
+    export PYTHONUNBUFFERED=1
+    export PYTHONPATH=$PYPATH:\$PYTHONPATH
+    export TESI_EXPERIMENT=PERT
+    export TESI_N_NODES=$N
+    export TESI_OUTPUT_DIR=$PERT/RISULTATI_$N
 
-export PYTHONUNBUFFERED=1
-export PYTHONPATH=/home/atorre/UTSP/unione/git/UTSP/common:$PYTHONPATH
+    cd $PERT
 
-python gurobi_parallelo.py pi
-EOF_PI
-)
-echo "PI:       job $PI (dopo $SETUP)"
+    echo '===== FASE: $FASE ====='
+    echo 'N_NODES='$N
+    echo 'PWD='$(pwd)
+    echo 'PYTHON='$(which python)
 
-EEV=$(sbatch --parsable \
-  --dependency=afterok:$SETUP \
-  --output="$TESI_OUTPUT_DIR/output/output_eev_%j.txt" \
-  --error="$TESI_OUTPUT_DIR/output/error_eev_%j.txt" \
-  --export=ALL,TESI_EXPERIMENT=PERT,TESI_N_NODES="$TESI_N_NODES" <<'EOF_EEV'
-#!/bin/bash
-#SBATCH --job-name=B_eev
-#SBATCH --time=06:00:00
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
+    python gurobi_parallelo.py $FASE
+  "
+}
 
-module load python
-module load gurobi
+echo "======================================================"
+echo "PERT pipeline B — $N nodi"
+echo "Output: $OUTPUT"
+echo "======================================================"
 
-cd /home/atorre/UTSP/unione/git/UTSP/PERT
-source /home/atorre/UTSP/unione/git/UTSP/venv/bin/activate
+JOB_SETUP=$(sbatch --parsable $COMMON_ARGS \
+  --job-name="pert_setup_$N" \
+  --time=12:00:00 \
+  --cpus-per-task=8 \
+  --mem=16G \
+  --wrap="$(wrap_cmd setup)")
 
-export PYTHONUNBUFFERED=1
-export PYTHONPATH=/home/atorre/UTSP/unione/git/UTSP/common:$PYTHONPATH
+echo "  setup    $JOB_SETUP"
 
-python gurobi_parallelo.py eev
-EOF_EEV
-)
-echo "EEV:      job $EEV (dopo $SETUP)"
+JOB_PI=$(sbatch --parsable $COMMON_ARGS \
+  --dependency=afterok:$JOB_SETUP \
+  --job-name="pert_pi_$N" \
+  --time=06:00:00 \
+  --cpus-per-task=4 \
+  --mem=8G \
+  --wrap="$(wrap_cmd pi)")
 
-STO=$(sbatch --parsable \
-  --dependency=afterok:$SETUP \
-  --output="$TESI_OUTPUT_DIR/output/output_sto_%j.txt" \
-  --error="$TESI_OUTPUT_DIR/output/error_sto_%j.txt" \
-  --export=ALL,TESI_EXPERIMENT=PERT,TESI_N_NODES="$TESI_N_NODES" <<'EOF_STO'
-#!/bin/bash
-#SBATCH --job-name=B_sto
-#SBATCH --time=24:00:00
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+echo "  pi       $JOB_PI"
 
-module load python
-module load gurobi
+JOB_EEV=$(sbatch --parsable $COMMON_ARGS \
+  --dependency=afterok:$JOB_SETUP \
+  --job-name="pert_eev_$N" \
+  --time=06:00:00 \
+  --cpus-per-task=4 \
+  --mem=8G \
+  --wrap="$(wrap_cmd eev)")
 
-cd /home/atorre/UTSP/unione/git/UTSP/PERT
-source /home/atorre/UTSP/unione/git/UTSP/venv/bin/activate
+echo "  eev      $JOB_EEV"
 
-export PYTHONUNBUFFERED=1
-export PYTHONPATH=/home/atorre/UTSP/unione/git/UTSP/common:$PYTHONPATH
+JOB_STO=$(sbatch --parsable $COMMON_ARGS \
+  --dependency=afterok:$JOB_SETUP \
+  --job-name="pert_sto_$N" \
+  --time=24:00:00 \
+  --cpus-per-task=8 \
+  --mem=32G \
+  --wrap="$(wrap_cmd sto)")
 
-python gurobi_parallelo.py sto
-EOF_STO
-)
-echo "STO:      job $STO (dopo $SETUP)"
+echo "  sto      $JOB_STO"
 
-ASM=$(sbatch --parsable \
-  --dependency=afterok:$PI:$EEV:$STO \
-  --output="$TESI_OUTPUT_DIR/output/output_assemble_%j.txt" \
-  --error="$TESI_OUTPUT_DIR/output/error_assemble_%j.txt" \
-  --export=ALL,TESI_EXPERIMENT=PERT,TESI_N_NODES="$TESI_N_NODES" \
-  run_2_assemble.sh)
-echo "Assemble: job $ASM (dopo $PI, $EEV, $STO)"
+JOB_ASS=$(sbatch --parsable $COMMON_ARGS \
+  --dependency=afterok:$JOB_PI:$JOB_EEV:$JOB_STO \
+  --job-name="pert_assemble_$N" \
+  --time=02:00:00 \
+  --cpus-per-task=4 \
+  --mem=8G \
+  --wrap="$(wrap_cmd assemble)")
+
+echo "  assemble $JOB_ASS"
 
 echo ""
-echo "Pipeline sottomessa. Controlla con: squeue -u $USER"
+echo "Dipendenze: setup -> (pi | eev | sto in parallelo) -> assemble"
+echo "Monitora: squeue -u atorre"
+echo ""
+echo "Log setup:"
+echo "  tail -f $OUTPUT/output_pert_setup_${JOB_SETUP}.txt"
