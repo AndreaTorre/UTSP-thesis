@@ -73,3 +73,13 @@ error_*.txt
 
 # Output diagnostici
 **/output_diagnostica/
+
+# Dati pesanti/opzionali
+data/cvett/
+data/naturalearth/
+
+# File di appunti locali
+comandi.txt
+
+# Archivio locale non tracciato
+_archivio/
