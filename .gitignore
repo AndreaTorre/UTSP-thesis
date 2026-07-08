@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# Ambienti virtuali
+venv/
+.venv/
+env/
+
+# Cache/tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Risultati esperimenti
+PERT/RISULTATI_*/
+CVETT/RISULTATI_*/
+
+# Output generici pesanti
+**/batch_sweep/
+**/checkpoint/
+**/checkpoints/
+**/pkl/
+**/parallel_data/
+**/output/
+**/grafici/
+
+# Modelli e checkpoint
+*.pt
+*.pth
+*.ckpt
+
+# Pickle e dati intermedi
+*.pkl
+*.pickle
+
+# Log e output testuali
+*.log
+*.out
+*.err
+output_*.txt
+error_*.txt
+
+# Dataset pesanti
+*.nc
+*.h5
+*.hdf5
+*.npy
+*.npz
+
+# Solver / temporanei
+*.lp
+*.mps
+*.sol
+*.mst
+*.bas
+
+# Sistema
+.DS_Store
+
+# Output diagnostici e summary generati
+**/output_diagnostica/
+*_batch_sweep_summary.csv
+*.bak
+
+# Backup manuali
+*.bak
+
+# Summary generati
+*_batch_sweep_summary.csv
+
+# Output diagnostici
+**/output_diagnostica/
