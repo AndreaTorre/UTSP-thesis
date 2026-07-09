@@ -38,8 +38,16 @@ DATA_FILE_FALLBACK = DATA_FILE_PRIMARY
 EXPERIMENT_DIR = ROOT_DIR / EXPERIMENT
 OUTPUT_DIR = str(EXPERIMENT_DIR / f"RISULTATI_{N_NODES}")
 
-WIND_NC_PATH = str(CVETT_DATA_DIR / "cvett.nc")
-ERA5_NC_PATH = WIND_NC_PATH
+WIND_NC_PATH_TRAIN = str(CVETT_DATA_DIR / "cvett_train.nc")
+WIND_NC_PATH_TEST = str(CVETT_DATA_DIR / "cvett_test.nc")
+
+ERA5_NC_PATH_TRAIN = WIND_NC_PATH_TRAIN
+ERA5_NC_PATH_TEST = WIND_NC_PATH_TEST
+
+# Alias vecchio, tenuto solo per compatibilità.
+# Se un file usa ancora ERA5_NC_PATH, userà il train.
+WIND_NC_PATH = WIND_NC_PATH_TRAIN
+ERA5_NC_PATH = ERA5_NC_PATH_TRAIN
 
 # Creo le cartelle standard, se non esistono.
 for subdir in ["output", "grafici", "checkpoint", "pkl"]:
@@ -51,6 +59,8 @@ for subdir in ["output", "grafici", "checkpoint", "pkl"]:
 os.environ["TESI_DATA_FILE"] = DATA_FILE_PRIMARY
 os.environ["TESI_DATA_FILE_FALLBACK"] = DATA_FILE_FALLBACK
 os.environ["TESI_OUTPUT_DIR"] = OUTPUT_DIR
+os.environ.setdefault("TESI_WIND_NC_PATH_TRAIN", WIND_NC_PATH_TRAIN)
+os.environ.setdefault("TESI_WIND_NC_PATH_TEST", WIND_NC_PATH_TEST)
 
 # ============================================================
 # Caricamento del vecchio config come backend temporaneo
@@ -86,8 +96,15 @@ DATA_FILE_FALLBACK = DATA_FILE_FALLBACK
 EXPERIMENT_DIR = str(EXPERIMENT_DIR)
 OUTPUT_DIR = OUTPUT_DIR
 
-WIND_NC_PATH = WIND_NC_PATH
-ERA5_NC_PATH = ERA5_NC_PATH
+WIND_NC_PATH_TRAIN = WIND_NC_PATH_TRAIN
+WIND_NC_PATH_TEST = WIND_NC_PATH_TEST
+
+ERA5_NC_PATH_TRAIN = ERA5_NC_PATH_TRAIN
+ERA5_NC_PATH_TEST = ERA5_NC_PATH_TEST
+
+# Alias vecchi: per compatibilità, puntano al train.
+WIND_NC_PATH = WIND_NC_PATH_TRAIN
+ERA5_NC_PATH = ERA5_NC_PATH_TRAIN
 
 # Alias utili, se in futuro servono.
 IS_PERT = EXPERIMENT == "PERT"
@@ -110,9 +127,4 @@ if _batch_sweep is not None:
     os.environ["TESI_OUTPUT_DIR"] = OUTPUT_DIR
 
 
-#DA SPOSTARE NEL CONFING DI CVETT
-# Modello di potenza rotary-wing per costo wind-adjusted (vedi paper droni_vento.pdf)
-DRONE_U  = 12.0          # ground speed nominale [m/s]  # NOTA: valore non nel paper, da confermare
-DRONE_A0 = 168.49         # W
-DRONE_A2 = 1.66375e-2     # W s^2 m^-2
-DRONE_A3 = 9.242625e-3    # W s^3 m^-3
+

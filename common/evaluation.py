@@ -542,25 +542,33 @@ def validate_policies(
     frequent_arcs, n_validation_scenarios,
     n_extra_arcs, mean_frac, sigma_frac,
     exp_name="",
-    coords=None, wind=None, alpha=None,  # NOTA: opzionali, usati solo per CVETT
+    coords=None, wind=None, alpha=None, # NOTA: opzionali, usati solo per CVETT
+    scenario_ids_val=None,
+    validation_seed=VALIDATION_SEED,
 ):
-    scenario_ids_val = list(range(1, n_validation_scenarios + 1))
-    reservation_sto  = sum(get_edge_value(p, i, j) for (i, j) in x_sto)
-    reservation_ev   = sum(get_edge_value(p, i, j) for (i, j) in x_ev)
+    
+
+    if scenario_ids_val is None:
+      scenario_ids_val = list(range(1, n_validation_scenarios + 1))
+    else:
+        scenario_ids_val = list(scenario_ids_val)
+        n_validation_scenarios = len(scenario_ids_val)
+    
+    reservation_sto = sum(get_edge_value(p, i, j) for (i, j) in x_sto)
+    reservation_ev = sum(get_edge_value(p, i, j) for (i, j) in x_ev)
 
     print("\n" + "=" * 60)
     print("VALIDAZIONE OUT-OF-SAMPLE")
-    print(f"  Scenari: {n_validation_scenarios} | seme: VALIDATION_SEED={VALIDATION_SEED}")
+    print(f"  Scenari: {n_validation_scenarios} | seed={validation_seed}")   
     print(f"  Politica STO: {sorted(x_sto)} ({len(x_sto)} archi prenotati)")
     print(f"  Politica EEV: {sorted(x_ev)} ({len(x_ev)} archi prenotati)")
 
     # Genero scenari di validazione indipendenti
     results_val, _, _ = generate_scenarios(
-        scenario_ids_val, nodes, E, base_dist, I, frequent_arcs,
-        n_extra_arcs, mean_frac, sigma_frac, VALIDATION_SEED,
-        root=root, env=env, p=p, C=C,
-        coords=coords, wind=wind, 
-    )
+    scenario_ids_val, nodes, E, base_dist, I, frequent_arcs,
+    n_extra_arcs, mean_frac, sigma_frac, validation_seed,
+    root=root, env=env, p=p, C=C,
+    coords=coords, wind=wind,)
 
     pi_costs  = {}
     sto_costs = {}; sto_tc = {}; sto_pc = {}
@@ -634,7 +642,7 @@ def validate_policies(
             "",
             "=" * 60,
             "VALIDAZIONE OUT-OF-SAMPLE",
-            f"  Scenari: {n_validation_scenarios} | seme: VALIDATION_SEED={VALIDATION_SEED}",
+            f"  Scenari: {n_validation_scenarios} | seed={validation_seed}",
             f"  Politica STO: {sorted(x_sto)} ({len(x_sto)} archi prenotati)",
             f"  Politica EEV: {sorted(x_ev)} ({len(x_ev)} archi prenotati)",
             "",

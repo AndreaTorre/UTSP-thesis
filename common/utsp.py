@@ -11,17 +11,15 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from config import (
-    OUTPUT_DIR, VALIDATION_SEED, N_VALIDATION_SCENARIOS,
-    N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC,
-    UTSP2_HIDDEN, UTSP2_NLAYERS, UTSP2_EPOCHS, UTSP2_LR,
-    UTSP2_STEP_LR, UTSP2_LOG_FREQ, UTSP2_LAMBDA1, UTSP2_LAMBDA2,
-    UTSP2_LAMBDA_E, UTSP2_ALPHA_DECODE,UTSP2_ALPHA_LOSS ,UTSP2_TEMP_MODE, UTSP2_TEMP_SCALE,
-    UTSP2_TEMP_FIXED, UTSP2_DIST_SCALE_MODE,
-    UTSP_LS_MAX_ACTIONS, UTSP_LS_ACTIONS_PER_ROUND,UTSP2_INCLUDE_PENALTY,UTSP2_INCLUDE_ENTROPY,
-    UTSP_LS_MAX_RESTARTS, UTSP_LS_M, UTSP_LS_K,
-    UTSP2_LS_ALPHA, UTSP_LS_BETA, UTSP_LS_RANDOM_SEED,
-    UTSP_LS_APPLY_INITIAL_2OPT,UTSP2_LAMBDA_D,N_TRAINING_SCENARIOS_UTSP, UTSP_TRAINING_SEED,
-    UTSP_BATCH_SIZE,
+    OUTPUT_DIR,N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC,  UTSP_BATCH_SIZE,
+    N_TRAINING_SCENARIOS_UTSP, TRAIN_SCENARIO_IDS_UTSP, DROP_LAST_TRAIN_BATCH,
+    UTSP_TRAINING_SEED, TEST_SCENARIO_IDS_UTSP, N_TEST_SCENARIOS_UTSP, TEST_SCENARIO_SEED, 
+    UTSP2_HIDDEN, UTSP2_NLAYERS, UTSP2_EPOCHS, UTSP2_LR, UTSP2_STEP_LR, UTSP2_LOG_FREQ,
+    UTSP2_LAMBDA1, UTSP2_LAMBDA2, UTSP2_LAMBDA_D, UTSP2_LAMBDA_E, UTSP2_ALPHA_DECODE,
+    UTSP2_ALPHA_LOSS, UTSP2_TEMP_MODE, UTSP2_TEMP_SCALE, UTSP2_TEMP_FIXED,
+    UTSP2_DIST_SCALE_MODE, UTSP2_INCLUDE_PENALTY, UTSP2_INCLUDE_ENTROPY, UTSP2_LS_ALPHA, 
+    UTSP_LS_MAX_ACTIONS, UTSP_LS_ACTIONS_PER_ROUND, UTSP_LS_MAX_RESTARTS,
+    UTSP_LS_M, UTSP_LS_K, UTSP_LS_BETA, UTSP_LS_RANDOM_SEED, UTSP_LS_APPLY_INITIAL_2OPT,
 )
 from tsp_utils import get_edge_value
 from gurobi_models import solve_exact_tsp
@@ -46,8 +44,8 @@ _leaky = F.leaky_relu
 # Numero di scenari usati nella fase di test UTSP.
 # Separato da N_TRAINING_SCENARIOS_UTSP e da N_VALIDATION_SCENARIOS,
 # perché il test della pipeline UTSP deve essere un blocco unico: di default usa N_VALIDATION_SCENARIOS.
-UTSP_TEST_SCENARIOS = int(os.environ.get("UTSP_TEST_SCENARIOS", str(N_VALIDATION_SCENARIOS)))
-UTSP_TEST_SEED = int(os.environ.get("UTSP_TEST_SEED", str(VALIDATION_SEED)))
+#UTSP_TEST_SCENARIOS = int(os.environ.get("UTSP_TEST_SCENARIOS", str(N_VALIDATION_SCENARIOS)))
+#UTSP_TEST_SEED = int(os.environ.get("UTSP_TEST_SEED", str(VALIDATION_SEED)))
 
 # Gestione artefatti training UTSP.
 # - default: training normale + salvataggio automatico
@@ -1313,6 +1311,23 @@ def run_esperimento_B_UTSP(
     il comportamento resta quello PERT.
     """
     scenario_kwargs = dict(scenario_kwargs or {})
+    wind_train = scenario_kwargs.pop("wind_train", None)
+    wind_test = scenario_kwargs.pop("wind_test", None)
+    
+    scenario_kwargs_train = dict(scenario_kwargs)
+    scenario_kwargs_test = dict(scenario_kwargs)
+    
+    if wind_train is not None:
+        scenario_kwargs_train["wind"] = wind_train
+    
+    if wind_test is not None:
+        scenario_kwargs_test["wind"] = wind_test
+    
+    # Compatibilità con PERT o vecchio CVETT:
+    # se arriva ancora scenario_kwargs={"wind": wind}, usa lo stesso vento per train e test.
+    if "wind" in scenario_kwargs:
+        scenario_kwargs_train["wind"] = scenario_kwargs["wind"]
+        scenario_kwargs_test["wind"] = scenario_kwargs["wind"]
     mode_norm = (mode or "local_search").lower().replace(" ", "_")
     if mode_norm != "local_search":
         raise ValueError("Questo utsp comune supporta solo mode='local_search'.")
@@ -1365,7 +1380,7 @@ def run_esperimento_B_UTSP(
             temperature=temperature,
             device=device,
             base_dist=base_dist,
-            scenario_kwargs=scenario_kwargs,
+            scenario_kwargs=scenario_kwargs_test,
             exp_name=exp_name,
             history=history,
         )
@@ -1378,13 +1393,13 @@ def run_esperimento_B_UTSP(
 
     # ── Scenari UTSP training: N_TRAINING_SCENARIOS_UTSP / UTSP_BATCH_SIZE batch ──
     batches_utsp = generate_scenario_batches(
-        nodes, E, base_dist, I, frequent_arcs,
-        N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC, UTSP_TRAINING_SEED,
-        root, env, p, C,
-        n_scenarios=N_TRAINING_SCENARIOS_UTSP,
-        batch_size=UTSP_BATCH_SIZE,
-        **scenario_kwargs,
-    )
+    nodes, E, base_dist, I, frequent_arcs,
+    N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC, UTSP_TRAINING_SEED,
+    root, env, p, C,
+    scenario_ids=TRAIN_SCENARIO_IDS_UTSP,
+    batch_size=UTSP_BATCH_SIZE,
+    drop_last=DROP_LAST_TRAIN_BATCH,
+    **scenario_kwargs_train,)
 
     # Combino tutti i risultati per calcoli globali (dist_scale, training GNN, decode, ecc.).
     # Rimappo gli id degli scenari su indici globali 0..K-1: in questo modo
@@ -1570,7 +1585,7 @@ def run_esperimento_B_UTSP(
         dist_scale=dist_scale,
         device=device,
         base_dist=base_dist,
-        scenario_kwargs=scenario_kwargs,
+        scenario_kwargs=scenario_kwargs_test,
         exp_name=exp_name,
         results_B=results_B,
         scenario_ids_B=scenario_ids_B,
@@ -1874,30 +1889,29 @@ def _build_heatmaps_for_scenarios(model, xy, nodes, results, scenario_ids, dist_
 
 def _generate_one_block_test_scenarios(
     nodes, E, base_dist, I, frequent_arcs, root, env, p, C,
-    n_scenarios, seed, scenario_kwargs,
+    scenario_ids, scenario_kwargs,
 ):
     """
-    Genera il test UTSP come blocco unico, non come sequenza di batch di test.
-    Internamente usa generate_scenario_batches con batch_size=n_scenarios solo per
-    riutilizzare il generatore già esistente.
+    Genera il test UTSP usando esplicitamente la lista comune di scenari test.
+    Gli ID sono locali al file cvett_test.nc.
     """
-    batches = generate_scenario_batches(
-        nodes, E, base_dist, I, frequent_arcs,
-        N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC, seed,
-        root, env, p, C,
-        n_scenarios=n_scenarios,
-        batch_size=n_scenarios,
+    scenario_ids = list(scenario_ids)
+
+    results, scenario_probs, _ = generate_scenarios(
+        scenario_ids, nodes, E, base_dist, I, frequent_arcs,
+        N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC,
+        TEST_SCENARIO_IDS_UTSP,
+        root=root, env=env, p=p, C=C,
         **scenario_kwargs,
     )
-    if not batches:
-        return {}, [], {}
 
-    batch = batches[0]
-    raw_ids = list(batch["scenario_ids"])
-    scenario_ids = list(range(len(raw_ids)))
-    results = {new_sid: batch["results"][old_sid] for new_sid, old_sid in zip(scenario_ids, raw_ids)}
-    probs = {new_sid: 1.0 / max(len(scenario_ids), 1) for new_sid in scenario_ids}
-    return results, scenario_ids, probs
+    scenario_probs = {
+        sid: 1.0 / len(scenario_ids)
+        for sid in scenario_ids
+    }
+
+    return results, scenario_ids, scenario_probs
+
 
 
 def _write_utsp_pipeline_stats_file(
@@ -1983,7 +1997,7 @@ def _write_utsp_pipeline_stats_file(
         "",
         "TEST UTSP",
         f"  scenari test       = {len(test_ids)}",
-        f"  seed test          = {UTSP_TEST_SEED}",
+        f"  seed test          = {TEST_SCENARIO_SEED}",
         f"  x_test da frequenze test = {sorted(x_test or [])}",
         f"  PI test            = {fmt(test_PI)}",
         f"  PI+pren test       = {fmt(test_PI_pren)}",
@@ -2064,7 +2078,7 @@ def _write_utsp_test_only_stats_file(
         "  nessuna rigenerazione degli scenari train UTSP",
         "",
         f"Scenari test       = {len(scenario_ids)}",
-        f"Seed test          = {UTSP_TEST_SEED}",
+        f"Seed test          = {TEST_SCENARIO_SEED}",
         f"x_test             = {sorted(x_test or [])}",
         f"Temperatura T      = {fmt(temperature)}",
         f"dist_scale         = {fmt(dist_scale)}",
@@ -2119,13 +2133,11 @@ def _run_utsp_test_only_branch(
     C = res_B["C"]
     frequent_arcs = res_B["frequent_arcs"]
 
-    print(f"  scenari test UTSP = {UTSP_TEST_SCENARIOS}  seed={UTSP_TEST_SEED}")
+    print(f"  scenari test UTSP = {len(TEST_SCENARIO_IDS_UTSP)}  seed={TEST_SCENARIO_SEED}")
     results_test, scenario_ids_test, scenario_probs_test = _generate_one_block_test_scenarios(
-        nodes, E, base_dist, I, frequent_arcs, root, env, p, C,
-        n_scenarios=UTSP_TEST_SCENARIOS,
-        seed=UTSP_TEST_SEED,
-        scenario_kwargs=scenario_kwargs,
-    )
+    nodes, E, base_dist, I, frequent_arcs, root, env, p, C,
+    scenario_ids=TEST_SCENARIO_IDS_UTSP,
+    scenario_kwargs=scenario_kwargs,)
 
     H_test = _build_heatmaps_for_scenarios(
         model, xy, nodes, results_test, scenario_ids_test, dist_scale, temperature, device
@@ -2166,11 +2178,12 @@ def _run_utsp_test_only_branch(
         test_bench = validate_policies(
             nodes, E, base_dist, root, env, I, p, C,
             res_B["x_used_sto"], res_B["x_ev"],
-            frequent_arcs, UTSP_TEST_SCENARIOS,
+            frequent_arcs, N_TEST_SCENARIOS_UTSP,
             N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC,
             exp_name=exp_name,
-            **scenario_kwargs,
-        )
+            scenario_ids_val=TEST_SCENARIO_IDS_UTSP,
+            validation_seed=TEST_SCENARIO_SEED,
+            **scenario_kwargs,)
         STO_test = test_bench.get("STO_val", float("nan"))
         EEV_test = test_bench.get("EEV_val", float("nan"))
 
@@ -2314,14 +2327,14 @@ def _run_local_search_branch(
     pi_pren_train_d = _compute_pi_with_booking_costs_local(results, scenario_ids, I, p)
     PI_pren_train = _scenario_mean(pi_pren_train_d, scenario_ids, scenario_probs)
 
-    print("\n  TEST UTSP: scenari presi tutti insieme, non divisi in batch decisionali")
-    print(f"  scenari test UTSP = {UTSP_TEST_SCENARIOS}  seed={UTSP_TEST_SEED}")
+    print("\n  TEST UTSP: scenari presi dal test set comune")
+    print(f"  scenari test UTSP = {len(TEST_SCENARIO_IDS_UTSP)}")
+    
     results_test, scenario_ids_test, scenario_probs_test = _generate_one_block_test_scenarios(
-        nodes, E, base_dist, I, frequent_arcs, root, env, p, C,
-        n_scenarios=UTSP_TEST_SCENARIOS,
-        seed=UTSP_TEST_SEED,
-        scenario_kwargs=scenario_kwargs,
-    )
+    nodes, E, base_dist, I, frequent_arcs, root, env, p, C,
+    scenario_ids=TEST_SCENARIO_IDS_UTSP,
+    scenario_kwargs=scenario_kwargs,
+)
 
     H_test = _build_heatmaps_for_scenarios(
         model, xy, nodes, results_test, scenario_ids_test, dist_scale, temperature, device
@@ -2364,11 +2377,12 @@ def _run_local_search_branch(
         test_bench = validate_policies(
             nodes, E, base_dist, root, env, I, p, C,
             res_B["x_used_sto"], res_B["x_ev"],
-            frequent_arcs, UTSP_TEST_SCENARIOS,
+            frequent_arcs, N_TEST_SCENARIOS_UTSP,
             N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC,
             exp_name=exp_name,
-            **scenario_kwargs,
-        )
+            scenario_ids_val=TEST_SCENARIO_IDS_UTSP,
+            validation_seed=TEST_SCENARIO_SEED,
+            **scenario_kwargs,)
         STO_test = test_bench.get("STO_val", float("nan"))
         EEV_test = test_bench.get("EEV_val", float("nan"))
     except Exception as exc:

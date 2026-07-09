@@ -4,13 +4,14 @@ import argparse
 import hashlib
 import os
 import pickle
-
+import numpy as np
 import torch
 
 from common import load_data, load_env, set_seed
-from config import OUTPUT_DIR
+from config import ERA5_NC_PATH_TRAIN, ERA5_NC_PATH_TEST, OUTPUT_DIR
 from experiment_B import run_esperimento_B, run_esperimento_B_wind
 from utsp import run_esperimento_B_UTSP
+from wind_perturbation import load_wind_field
 
 CACHE_PATH = f"/home/atorre/UTSP/unione/git/UTSP/CVETT/RISULTATI_{os.environ['TESI_N_NODES']}/pkl/res_B_cached.pkl"
 
@@ -30,18 +31,20 @@ def main():
     set_seed()
         
     env = load_env()
-     
     nodes, coords, base_dist, E, root = load_data()
-    from wind_perturbation import load_wind_field
-    from config import ERA5_NC_PATH, OUTPUT_DIR
-    wind  = load_wind_field(ERA5_NC_PATH)
-    import numpy as np
-    u = wind["u100"][0]
-    v = wind["v100"][0]
+    wind_train = load_wind_field(ERA5_NC_PATH_TRAIN)
+    wind_test = load_wind_field(ERA5_NC_PATH_TEST)
+    
+    u = wind_train["u100"][0]
+    v = wind_train["v100"][0]
     speed = np.sqrt(u**2 + v**2)
-    print(f"[WIND] istanti temporali: {wind['n_times']}")
-    print(f"[WIND] griglia: {len(wind['lats'])} lat x {len(wind['lons'])} lon")
-    print(f"[WIND] velocita media: {speed.mean():.2f} m/s | max: {speed.max():.2f} m/s")
+    
+    print(f"[WIND TRAIN] istanti temporali: {wind_train['n_times']}")
+    print(f"[WIND TRAIN] griglia: {len(wind_train['lats'])} lat x {len(wind_train['lons'])} lon")
+    print(f"[WIND TRAIN] velocita media: {speed.mean():.2f} m/s | max: {speed.max():.2f} m/s")
+    
+    print(f"[WIND TEST] istanti temporali: {wind_test['n_times']}")
+    print(f"[WIND TEST] griglia: {len(wind_test['lats'])} lat x {len(wind_test['lons'])} lon")
     risultati = {}
 
     if os.path.exists(CACHE_PATH):
@@ -50,7 +53,7 @@ def main():
             risultati["B"] = pickle.load(f)
     else:
         print("File .pkl non trovato. Eseguo esperimento B...")
-        risultati["B"] = run_esperimento_B_wind(nodes, coords, base_dist, E, root, env, wind)
+        risultati["B"] = run_esperimento_B_wind(nodes, coords, base_dist, E, root, env, wind_train)
     
 
     os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
@@ -90,7 +93,7 @@ def main():
         nodes, coords, base_dist, E, root, env,
         res_B=risultati["B"],
         mode=mode,
-        scenario_kwargs={"wind": wind},
+        scenario_kwargs={ "wind_train": wind_train, "wind_test": wind_test,},
         exp_name="espB_wind_UTSP_LS",
     )
 

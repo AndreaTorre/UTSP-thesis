@@ -121,8 +121,18 @@ def build_wind_perturbation(
     dict (i, j) -> delta, drop-in compatibile con
         c_ij = max(base_dist[i][j] + pert[(i, j)], eps)
     """
-    rng = np.random.default_rng(scenario_id)  # riproducibilità per scenario
-    t_idx = int(rng.integers(0, wind["n_times"]))
+    # Gli scenario_id sono 1-based e locali al file vento passato.
+    # Quindi:
+    # scenario_id = 1 -> primo istante del file
+    # scenario_id = 2 -> secondo istante del file
+    # ecc.
+    t_idx = int(scenario_id) - 1
+    
+    if t_idx < 0 or t_idx >= wind["n_times"]:
+        raise ValueError(
+            f"scenario_id={scenario_id} fuori range per il file vento: "
+            f"n_times={wind['n_times']}."
+        )
     n_lat = len(wind["lats"])
     n_lon = len(wind["lons"])
     u_field = wind["u100"][t_idx]
