@@ -9,7 +9,7 @@ import numpy as np
 from config import (
     N_CALIBRATION_SCENARIOS, MIN_FREQ_FREQUENT, N_FREQUENT_ARCS,
     CALIBRATION_SCENARIO_SEED, N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC,
-    OUTPUT_DIR, CALIB_TIME_LIMIT, CALIB_MIP_GAP,
+    OUTPUT_DIR, CALIB_TIME_LIMIT, CALIB_MIP_GAP,PI_TIME_LIMIT, PI_MIP_GAP,
 )
 from tsp_utils import canon_edge, all_undirected_edges, base_cost_undirected
 from gurobi_models import solve_exact_tsp
@@ -250,16 +250,10 @@ def generate_scenarios(
         scenario_dist = build_scenario_dist(base_dist, pert)
 
         if solve_pi:
-            exact_free = solve_exact_tsp(
-                nodes,
-                E,
-                scenario_dist,
-                root,
-                env,
-                fixed_arcs=[],
-                fixed_edges_undir=[],
-                output_flag=0,
-            )
+          exact_free = solve_exact_tsp(
+              nodes, E, scenario_dist, root, env,
+              fixed_arcs=[], fixed_edges_undir=[], output_flag=0,
+              time_limit=PI_TIME_LIMIT, mip_gap=PI_MIP_GAP,)
         else:
             exact_free = {
                 "length": None,

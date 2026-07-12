@@ -1,7 +1,17 @@
 # -*- coding: utf-8 -*-
+"""
+Parametri specifici dell'esperimento CVETT (perturbazioni da vento ERA5).
+
+N_NODES, WIND_NC_PATH_TRAIN, WIND_NC_PATH_TEST arrivano già iniettati
+da common/config.py: qui si usano così come sono, solo per contare le
+osservazioni e campionare gli scenari. ROOT_DIR, OUTPUT_DIR,
+DATA_FILE_PRIMARY/FALLBACK, INSTANCE_TAG restano in common/config.py:
+qui non si ricalcola nessun path (prima venivano ridefiniti da capo,
+con un default hardcoded proprio — rimosso: unica fonte di verità ora
+è common/config.py).
+"""
 
 import os
-import re
 import random as _random
 import h5py
 
@@ -61,49 +71,10 @@ def _sample_scenario_ids(max_id, n_scenarios, seed, label):
 
 
 # ============================================================
-# PERCORSI PRINCIPALI
-# ============================================================
-
-ROOT_DIR = os.getenv(
-    "TESI_ROOT_DIR",
-    "/home/atorre/UTSP/unione/git/UTSP",
-)
-
-DATA_FILE_PRIMARY = os.getenv(
-    "TESI_DATA_FILE",
-    f"{ROOT_DIR}/data/pert/nodi_15.json",
-)
-
-_match = re.search(r"nodi_(\d+)", DATA_FILE_PRIMARY)
-INSTANCE_TAG = _match.group(1) if _match else "unknown"
-N_NODES = int(INSTANCE_TAG) if INSTANCE_TAG.isdigit() else 0
-
-DATA_FILE_FALLBACK = os.getenv(
-    "TESI_DATA_FILE_FALLBACK",
-    f"{ROOT_DIR}/data/pert/nodi_{INSTANCE_TAG}.json",
-)
-
-OUTPUT_DIR = os.getenv(
-    "TESI_OUTPUT_DIR",
-    f"{ROOT_DIR}/CVETT/RISULTATI_{INSTANCE_TAG}",
-)
-
-
-# ============================================================
 # FILE CVETT TRAIN / TEST
 # ============================================================
 
 PERTURBATION_MODE = "wind_nc"
-
-WIND_NC_PATH_TRAIN = os.getenv(
-    "TESI_WIND_NC_PATH_TRAIN",
-    f"{ROOT_DIR}/data/cvett/cvett_train.nc",
-)
-
-WIND_NC_PATH_TEST = os.getenv(
-    "TESI_WIND_NC_PATH_TEST",
-    f"{ROOT_DIR}/data/cvett/cvett_test.nc",
-)
 
 WIND_U_VAR = "u100"
 WIND_V_VAR = "v100"
@@ -132,9 +103,6 @@ if N_WIND_OBSERVATIONS_TEST <= 0:
         f"Il file test non contiene osservazioni valide: "
         f"{N_WIND_OBSERVATIONS_TEST}."
     )
-
-ERA5_NC_PATH_TRAIN = WIND_NC_PATH_TRAIN
-ERA5_NC_PATH_TEST = WIND_NC_PATH_TEST
 
 
 # ============================================================
@@ -185,6 +153,12 @@ SCENARIO_IDS = _sample_scenario_ids(
     label="STO/EEV/PI train",
 )
 
+PI_TIME_LIMIT  = 300     # secondi, per singolo scenario PI
+PI_MIP_GAP     = 0.08
+
+EEV_TIME_LIMIT = 300     # secondi, per singolo solve (medione o second stage)
+EEV_MIP_GAP    = 0.08
+
 
 # ============================================================
 # SCENARI DI VALIDAZIONE
@@ -220,7 +194,7 @@ WIND_MAP_COORDS_TO_GRID = _env_bool("TESI_WIND_MAP_COORDS_TO_GRID", True)
 
 
 # ============================================================
-# PERTURBAZIONI SINTETICHE
+# PERTURBAZIONI SINTETICHE (compatibilità con l'interfaccia PERT)
 # ============================================================
 
 N_EXTRA_ARCS = _env_int("TESI_N_EXTRA_ARCS", 30)
@@ -262,7 +236,7 @@ if N_NODES == 15:
     K_MEDOID_NODES = [70, 101, 84]
     MAX_KMEDOID_I_ARCS = 7
     KMEDOID_ARCS_PER_NODE = 5
-    STO_TIME_LIMIT = _env_int("TESI_STO_TIME_LIMIT", 2700)
+    STO_TIME_LIMIT = _env_int("TESI_STO_TIME_LIMIT", 10800)
     STO_MIP_GAP = _env_float("TESI_STO_MIP_GAP", 0.0001)
 
 elif N_NODES == 25:
@@ -280,7 +254,7 @@ elif N_NODES == 40:
     STO_MIP_GAP = _env_float("TESI_STO_MIP_GAP", 0.005)
 
 else:
-    raise ValueError(f"Istanza non configurata: nodi_{INSTANCE_TAG}")
+    raise ValueError(f"Istanza non configurata: nodi_{N_NODES}")
 
 
 # ============================================================
@@ -329,6 +303,8 @@ TEST_SCENARIO_IDS = _sample_scenario_ids(
 # Alias per compatibilità con codice UTSP esistente.
 N_TEST_SCENARIOS_UTSP = N_TEST_SCENARIOS
 TEST_SCENARIO_IDS_UTSP = TEST_SCENARIO_IDS
+
+
 
 DROP_LAST_TRAIN_BATCH = _env_bool("TESI_DROP_LAST_TRAIN_BATCH", True)
 DROP_LAST_TEST_BATCH = _env_bool("TESI_DROP_LAST_TEST_BATCH", False)
@@ -422,14 +398,6 @@ UTSP_LS_APPLY_INITIAL_2OPT = _env_bool(
     "TESI_UTSP_LS_APPLY_INITIAL_2OPT",
     True,
 )
-
-
-# ============================================================
-# NOTE OPERATIVE
-# ============================================================
-
-# Per disabilitare k-medoids e scegliere archi manualmente:
-# K_MEDOID_NODES = []
 
 
 # ============================================================

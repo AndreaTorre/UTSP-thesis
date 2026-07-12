@@ -15,9 +15,6 @@ import math
 import numpy as np
 import h5py
 
-from config import DRONE_U, DRONE_A0, DRONE_A2, DRONE_A3
-
-
 # ---------------------------------------------------------------------------
 # CARICAMENTO
 # ---------------------------------------------------------------------------

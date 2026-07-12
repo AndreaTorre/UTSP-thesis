@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
 
-from config import VALIDATION_SEED
+from config import VALIDATION_SEED, EEV_TIME_LIMIT, EEV_MIP_GAP
 from common import out_path
 from tsp_utils import canon_edge, get_edge_value
 from scenarios import generate_scenarios
@@ -535,6 +535,45 @@ def print_and_save_summary(
     print(f"\n  → Risultati salvati in: {fname}")
 
     return output_text, VSS_abs
+    
+    
+    
+def _aggregate_test_instances(exp_name, istanza_metrics):
+    """
+    Aggrega su più istanze di test le metriche scalari di _run_local_search_branch.
+    Stessa convenzione di output di print_and_save_summary: stampa + salva su file.
+    """
+    keys = ["UTSP_LS_test", "PI_test", "PI_pren_test", "STO_test", "EEV_test",
+            "gap_ls_sto", "gap_ls_eev", "gap_ls_pi"]
+
+    lines = [
+        "DIAGNOSTICA AGGREGATA SU TUTTE LE ISTANZE DI TEST",
+        f"Numero istanze = {len(istanza_metrics)}",
+        "",
+    ]
+
+    agg = {"n_istanze": len(istanza_metrics)}
+    for k in keys:
+        vals = np.array(
+            [m[k] for m in istanza_metrics if np.isfinite(m[k])], dtype=float
+        )
+        mean = float(vals.mean()) if len(vals) else float("nan")
+        std = float(vals.std()) if len(vals) else float("nan")
+        agg[f"{k}_mean"] = mean
+        agg[f"{k}_std"] = std
+        lines.append(f"  {k:<14} media = {mean:.4f} | std = {std:.4f} (n={len(vals)})")
+
+    output_text = "\n".join(lines)
+    print("\n" + output_text)
+
+    fname = out_path(f"risultati_{exp_name}_test_aggregato.txt")
+    with open(fname, "w", encoding="utf-8") as f:
+        f.write(output_text + "\n")
+    print(f"\n  → Diagnostica aggregata salvata in: {fname}")
+
+    return agg    
+    
+    
 
 def validate_policies(
     nodes, E, base_dist, root, env, I, p, C,

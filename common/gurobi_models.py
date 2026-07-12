@@ -2,7 +2,7 @@
 import gurobipy as gp
 from gurobipy import GRB
 
-from config import K_MEDOID_NODES, MAX_KMEDOID_I_ARCS, KMEDOID_ARCS_PER_NODE, STO_TIME_LIMIT, STO_MIP_GAP
+from config import K_MEDOID_NODES, MAX_KMEDOID_I_ARCS, KMEDOID_ARCS_PER_NODE, STO_TIME_LIMIT, STO_MIP_GAP, EEV_TIME_LIMIT, EEV_MIP_GAP, PI_TIME_LIMIT, PI_MIP_GAP
 from tsp_utils import canon_edge, directed_to_undirected_arcs, base_cost_undirected, get_edge_value, extract_tour_from_arcs, tour_length_from_arcs
 
 def build_I_from_medoid_outgoing_nodes(nodes, E, base_dist,
@@ -125,11 +125,15 @@ def solve_exact_tsp(nodes, E, dist, root, env, fixed_arcs=None, fixed_edges_undi
 
 def solve_reservation_tsp(nodes, E, I, dist, root, p, C, env,
                           fixed_reservations=None, output_flag=0,
-                          model_name="reservation_tsp"):
+                          model_name="reservation_tsp", time_limit=None, mip_gap=None):
     model = gp.Model(model_name, env=env)
     model.Params.OutputFlag = output_flag
     model.Params.Threads = 1
     model.Params.Seed = 42
+    if time_limit is not None:
+        model.Params.TimeLimit = time_limit
+    if mip_gap is not None:
+        model.Params.MIPGap = mip_gap
     n = len(nodes)
 
     x = model.addVars(I, vtype=GRB.BINARY, name="x_prenota")

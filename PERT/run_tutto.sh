@@ -33,29 +33,29 @@ COMMON_ARGS="
 "
 
 wrap_cmd() {
-  FASE=$1
+  # $1 = fase
   echo "
     cd $ROOT
-
-    module load python
-    module load gurobi
-
+    module load gurobi/13.0.0
     source $VENV/bin/activate
 
-    export PYTHONUNBUFFERED=1
+    unset GRB_WLSACCESSID
+    unset GRB_WLSSECRET
+    unset GRB_LICENSEID
+
     export PYTHONPATH=$PYPATH:\$PYTHONPATH
     export TESI_EXPERIMENT=PERT
     export TESI_N_NODES=$N
-    export TESI_OUTPUT_DIR=$PERT/RISULTATI_$N
-
     cd $PERT
+    echo '===== DEBUG GUROBI ====='
+    module list
+    which gurobi_cl || true
+    gurobi_cl --version || true
+    env | grep -i gurobi || true
+    env | grep -i grb || true
+    python -c 'import gurobipy as gp; print(\"gurobipy\", gp.gurobi.version()); print(gp.__file__)'
 
-    echo '===== FASE: $FASE ====='
-    echo 'N_NODES='$N
-    echo 'PWD='$(pwd)
-    echo 'PYTHON='$(which python)
-
-    python gurobi_parallelo.py $FASE
+    python gurobi_parallelo.py $1
   "
 }
 
@@ -76,7 +76,7 @@ echo "  setup    $JOB_SETUP"
 JOB_PI=$(sbatch --parsable $COMMON_ARGS \
   --dependency=afterok:$JOB_SETUP \
   --job-name="pert_pi_$N" \
-  --time=06:00:00 \
+  --time=24:00:00 \
   --cpus-per-task=4 \
   --mem=8G \
   --wrap="$(wrap_cmd pi)")
@@ -86,7 +86,7 @@ echo "  pi       $JOB_PI"
 JOB_EEV=$(sbatch --parsable $COMMON_ARGS \
   --dependency=afterok:$JOB_SETUP \
   --job-name="pert_eev_$N" \
-  --time=06:00:00 \
+  --time=24:00:00 \
   --cpus-per-task=4 \
   --mem=8G \
   --wrap="$(wrap_cmd eev)")
