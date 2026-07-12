@@ -83,3 +83,12 @@ comandi.txt
 
 # Archivio locale non tracciato
 _archivio/
+venv/
+__pycache__/
+*.pyc
+*.pkl
+*.pt
+*.nc
+_archivio/
+**/RISULTATI_*/output/
+**/RISULTATI_*/checkpoint/
