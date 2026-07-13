@@ -11,7 +11,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from config import (
-    OUTPUT_DIR,N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC,  UTSP_BATCH_SIZE,
+    OUTPUT_DIR, TRAIN_OUTPUT_DIR, N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC,  UTSP_BATCH_SIZE,
     N_TRAINING_SCENARIOS_UTSP, TRAIN_SCENARIO_IDS_UTSP, DROP_LAST_TRAIN_BATCH,
     UTSP_TRAINING_SEED, TEST_SCENARIO_IDS_UTSP, N_TEST_SCENARIOS_UTSP, TEST_SCENARIO_SEED, 
     UTSP2_HIDDEN, UTSP2_NLAYERS, UTSP2_EPOCHS, UTSP2_LR, UTSP2_STEP_LR, UTSP2_LOG_FREQ,
@@ -284,7 +284,10 @@ def _artifact_exp_name(exp_name):
 
 def _utsp_train_dir(exp_name):
     name = _artifact_exp_name(exp_name)
-    train_dir = os.path.join(OUTPUT_DIR, "train", name)
+    # NOTA: TRAIN_OUTPUT_DIR, non OUTPUT_DIR — con TESI_TEST_OUTPUT_SUBDIR
+    # l'output è deviato in test/IS_*_DIM_*, ma i checkpoint vivono sempre
+    # in <batch_dir>/train/<nome>. I due coincidono fuori dal test sweep.
+    train_dir = os.path.join(TRAIN_OUTPUT_DIR, "train", name)
     os.makedirs(train_dir, exist_ok=True)
     return train_dir
 
@@ -687,6 +690,23 @@ def run_esperimento_B_UTSP(
     if "wind" in scenario_kwargs:
         scenario_kwargs_train["wind"] = scenario_kwargs["wind"]
         scenario_kwargs_test["wind"] = scenario_kwargs["wind"]
+
+    # NOTA (fix di correttezza): generate_scenarios attiva la perturbazione da
+    # vento SOLO se riceve sia `wind` che `coords` (condizione
+    # `coords is not None and wind is not None`); altrimenti ricade
+    # silenziosamente su build_perturbation, cioè la perturbazione SINTETICA.
+    # Finora `coords` non veniva mai messo in scenario_kwargs, quindi in CVETT
+    # il training e il test della rete giravano su scenari sintetici mentre
+    # Experiment B (che passa coords+wind esplicitamente) generava i benchmark
+    # STO/EEV/PI su scenari da vento: benchmark e rete su due distribuzioni
+    # diverse, quindi numeri non confrontabili. Qui lo aggiungiamo, ma solo
+    # dove c'è davvero il vento — per PERT resta assente e la perturbazione
+    # sintetica è quella giusta.
+    if "wind" in scenario_kwargs_train:
+        scenario_kwargs_train["coords"] = coords
+    if "wind" in scenario_kwargs_test:
+        scenario_kwargs_test["coords"] = coords
+
     mode_norm = (mode or "local_search").lower().replace(" ", "_")
     if mode_norm != "local_search":
         raise ValueError("Questo utsp comune supporta solo mode='local_search'.")
@@ -952,9 +972,7 @@ def run_esperimento_B_UTSP(
     results_B=results_B,
     scenario_ids_B=scenario_ids_B,
     scenario_probs_B=scenario_probs_B,
-    train_batch_id=train_batch_id_utsp,
-    dim_istanza_test=DIM_ISTANZA_TEST,
-    n_istanze_test=N_ISTANZE_TEST,)
+    train_batch_id=train_batch_id_utsp,)
     
     output.update({"local_search": ls_out})
 

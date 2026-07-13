@@ -120,6 +120,35 @@ UTSP_BATCH_SIZE = int(os.environ.get("TESI_BATCH_SWEEP", 30))
 N_ISTANZE_TARGET = 100
 N_TRAINING_SCENARIOS_UTSP = UTSP_BATCH_SIZE * N_ISTANZE_TARGET
 
+# NOTA: PERT genera perturbazioni sintetiche, non ha un tetto di
+# osservazioni come CVETT (vento ERA5) — quindi qui gli id scenario sono
+# semplicemente range, non un campionamento senza reinserimento da un
+# pool finito.
+#
+# ATTENZIONE ai semi: build_perturbation inizializza il generatore con
+# Random(base_seed + scenario_id) — una SOMMA. Due stream con semi diversi
+# si sovrappongono con offset: (seed_a + s) == (seed_b + t) produce scenari
+# IDENTICI. Con il vecchio default TEST_SCENARIO_SEED=99 e training a
+# GLOBAL_SEED=42 su id 1..3000, i primi 2943 scenari di test coincidevano
+# byte-per-byte con gli scenari di training 58..3000: contaminazione totale
+# del test set. Il default 1_000_000 tiene l'intervallo dei semi effettivi
+# di test (1_000_001..1_030_000) disgiunto da training (43..3042),
+# calibrazione (seed 30) ed Experiment B (seed 42, id 1..8).
+TRAIN_SCENARIO_IDS_UTSP = list(range(1, N_TRAINING_SCENARIOS_UTSP + 1))
+DROP_LAST_TRAIN_BATCH = os.environ.get("TESI_DROP_LAST_TRAIN_BATCH", "1").strip() == "1"
+
+# Scenari di test comune, usati da _run_utsp_test_only_branch /
+# _run_local_search_branch e affettati in istanze da DIM_ISTANZA_TEST /
+# N_ISTANZE_TEST (iniettati da common/config.py). Il default copre esattamente
+# il caso peggiore N_ISTANZE_TEST x DIM_ISTANZA_TEST; per un test sweep con
+# combinazioni più grandi, alza TESI_N_TEST_SCENARIOS_UTSP di conseguenza.
+TEST_SCENARIO_SEED = int(os.environ.get("TESI_TEST_SCENARIO_SEED", 1_000_000))
+N_TEST_SCENARIOS_UTSP = int(os.environ.get(
+    "TESI_N_TEST_SCENARIOS_UTSP",
+    DIM_ISTANZA_TEST * N_ISTANZE_TEST,
+))
+TEST_SCENARIO_IDS_UTSP = list(range(1, N_TEST_SCENARIOS_UTSP + 1))
+
 UTSP_TRAINING_SEED = GLOBAL_SEED
 UTSP_LS_MAX_ACTIONS = 5000
 UTSP_LS_ACTIONS_PER_ROUND = 120

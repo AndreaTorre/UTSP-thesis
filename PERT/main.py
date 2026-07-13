@@ -10,9 +10,14 @@ import hashlib
 
 
 
-from config import OUTPUT_DIR
+from config import TEST_SCENARIO_CACHE_DIR
 
-CACHE_PATH = os.path.join(OUTPUT_DIR, "pkl", "res_B_cached.pkl")
+# NOTA: fisso su TEST_SCENARIO_CACHE_DIR (= RISULTATI_N/pkl), non su OUTPUT_DIR:
+# Experiment B (STO/EEV/PI) non dipende da UTSP_BATCH_SIZE né dalla sottocartella
+# di test, quindi va condiviso tra tutti i BATCH_X e tutte le combinazioni
+# IS/DIM. Con OUTPUT_DIR ogni combinazione avrebbe rifatto STO/EEV da zero
+# (STO_TIME_LIMIT arriva a 12h su 40 nodi).
+CACHE_PATH = os.path.join(TEST_SCENARIO_CACHE_DIR, "res_B_cached.pkl")
 def main():
     parser = argparse.ArgumentParser(description="Esegue Esperimento B e le varianti UTSP.")
     parser.add_argument(

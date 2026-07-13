@@ -45,6 +45,12 @@ DATA_FILE_FALLBACK = DATA_FILE_PRIMARY
 EXPERIMENT_DIR = ROOT_DIR / EXPERIMENT
 OUTPUT_DIR = str(EXPERIMENT_DIR / f"RISULTATI_{N_NODES}")
 
+# Cartella condivisa per la cache degli scenari di test (PI/perturbazioni).
+# NOTA: fissa apposta, non segue batch_sweep né la sottocartella di test:
+# il PI di uno scenario_id non dipende dal batch size della rete né da
+# quante istanze/DIM stai testando, quindi la cache va condivisa da tutti.
+TEST_SCENARIO_CACHE_DIR = os.path.join(OUTPUT_DIR, "pkl")
+
 WIND_NC_PATH_TRAIN = str(CVETT_DATA_DIR / "cvett_train.nc")
 WIND_NC_PATH_TEST = str(CVETT_DATA_DIR / "cvett_test.nc")
 
@@ -81,9 +87,14 @@ _backend.N_NODES = N_NODES
 _backend.WIND_NC_PATH_TRAIN = WIND_NC_PATH_TRAIN
 _backend.WIND_NC_PATH_TEST = WIND_NC_PATH_TEST
 
-
-DIM_ISTANZA_TEST = 20
-N_ISTANZE_TEST = 100
+# TESI_DIM_ISTANZA_TEST / TESI_N_ISTANZE_TEST: dimensione e numero delle
+# istanze di test-sweep. Iniettate nel backend PRIMA di eseguirlo perché
+# N_TEST_SCENARIOS_UTSP (definito nel backend) deve poterne dipendere,
+# così basta un solo posto dove cambiare la dimensione del pool di test.
+DIM_ISTANZA_TEST = int(os.getenv("TESI_DIM_ISTANZA_TEST", "20"))
+N_ISTANZE_TEST = int(os.getenv("TESI_N_ISTANZE_TEST", "100"))
+_backend.DIM_ISTANZA_TEST = DIM_ISTANZA_TEST
+_backend.N_ISTANZE_TEST = N_ISTANZE_TEST
 
 _spec.loader.exec_module(_backend)
 
@@ -102,6 +113,36 @@ _batch_sweep = os.getenv("TESI_BATCH_SWEEP")
 if _batch_sweep is not None:
     UTSP_BATCH_SIZE = int(_batch_sweep)
     OUTPUT_DIR = os.path.join(OUTPUT_DIR, "batch_sweep", f"BATCH_{UTSP_BATCH_SIZE}")
+    for _subdir in ("output", "grafici", "checkpoint", "pkl"):
+        os.makedirs(os.path.join(OUTPUT_DIR, _subdir), exist_ok=True)
+
+# ============================================================
+# Sottocartella di test sweep (opzionale)
+# ============================================================
+# TESI_TEST_OUTPUT_SUBDIR, se settata, sposta l'output sotto
+# OUTPUT_DIR/<valore>, tipicamente "test/IS_<n>_DIM_<dim>". Usata insieme
+# a TESI_UTSP_TEST_ONLY=1 per isolare ogni combinazione (IS, DIM) del
+# test sweep dentro la cartella del suo BATCH_X, senza toccare train/.
+# NOTA: TEST_SCENARIO_CACHE_DIR resta quello calcolato sopra, prima di
+# questa mutazione: la cache PI è condivisa da tutte le combinazioni.
+
+# I checkpoint di training vivono SEMPRE in <batch_dir>/train/<nome>, anche
+# quando l'output del test è deviato nella sottocartella: TRAIN_OUTPUT_DIR
+# congela il valore PRIMA della mutazione. Senza questo, in modalità
+# test-only _load_utsp_train_artifact cercherebbe il modello dentro
+# test/IS_*_DIM_*/train/... che non esiste (FileNotFoundError).
+TRAIN_OUTPUT_DIR = OUTPUT_DIR
+
+# TESI_TEST_SKIP_PI=1: genera gli scenari di test SENZA risolvere il PI
+# (solve_exact_tsp), che non serve per confrontare STO/EEV/UTSP. Le entry
+# in cache restano complete di perturbazioni e scenario_dist, con
+# exact_free vuoto: un run successivo con TESI_TEST_SKIP_PI=0 riempie i
+# PI mancanti sugli STESSI scenari, senza rigenerare né spostare nulla.
+TEST_SKIP_PI = os.getenv("TESI_TEST_SKIP_PI", "0").strip() == "1"
+
+_test_subdir = os.getenv("TESI_TEST_OUTPUT_SUBDIR")
+if _test_subdir is not None:
+    OUTPUT_DIR = os.path.join(OUTPUT_DIR, _test_subdir)
     for _subdir in ("output", "grafici", "checkpoint", "pkl"):
         os.makedirs(os.path.join(OUTPUT_DIR, _subdir), exist_ok=True)
 
