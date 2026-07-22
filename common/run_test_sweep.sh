@@ -1,4 +1,5 @@
 #!/bin/bash
+UTSP_ROOT="${TESI_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # run_test_sweep.sh — testa ogni modello UTSP già allenato (batch_sweep) su
 # più combinazioni (n_istanze_test, dim_istanza_test), senza riallenare.
 #
@@ -30,7 +31,7 @@ unset GRB_WLSACCESSID
 unset GRB_WLSSECRET
 unset GRB_LICENSEID
 
-ROOT=/home/atorre/UTSP/unione/git/UTSP
+ROOT=${UTSP_ROOT}
 N_ISTANZE_TEST=${TESI_N_ISTANZE_TEST:-100}
 
 # PI saltato di default: per confrontare STO/EEV/UTSP non serve, e toglie

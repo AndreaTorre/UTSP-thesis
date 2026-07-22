@@ -358,7 +358,7 @@ UTSP2_DIST_SCALE_MODE = os.getenv(
     "mean_positive",
 )
 
-UTSP2_INCLUDE_PENALTY = _env_bool("TESI_UTSP2_INCLUDE_PENALTY", True)
+UTSP2_INCLUDE_PENALTY = _env_bool("TESI_UTSP_INCLUDE_PENALTY", True)   # NOTA: era TESI_UTSP2_*, non coincideva con PERT
 UTSP2_INCLUDE_ENTROPY = _env_bool("TESI_UTSP2_INCLUDE_ENTROPY", False)
 
 

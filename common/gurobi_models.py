@@ -2,7 +2,9 @@
 import gurobipy as gp
 from gurobipy import GRB
 
-from config import K_MEDOID_NODES, MAX_KMEDOID_I_ARCS, KMEDOID_ARCS_PER_NODE, STO_TIME_LIMIT, STO_MIP_GAP, EEV_TIME_LIMIT, EEV_MIP_GAP, PI_TIME_LIMIT, PI_MIP_GAP
+# NOTA: EEV_*/PI_* non servono qui: solve_exact_tsp e solve_reservation_tsp
+# ricevono time_limit/mip_gap come argomenti dai chiamanti.
+from config import K_MEDOID_NODES, MAX_KMEDOID_I_ARCS, KMEDOID_ARCS_PER_NODE, STO_TIME_LIMIT, STO_MIP_GAP
 from tsp_utils import canon_edge, directed_to_undirected_arcs, base_cost_undirected, get_edge_value, extract_tour_from_arcs, tour_length_from_arcs
 
 def build_I_from_medoid_outgoing_nodes(nodes, E, base_dist,

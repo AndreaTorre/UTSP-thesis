@@ -1,4 +1,5 @@
 #!/bin/bash
+UTSP_ROOT="${TESI_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # PERT/run_tutto.sh — Pipeline parallela esperimento B per PERT
 # Uso:
 #   bash run_tutto.sh 15
@@ -14,7 +15,7 @@ if [[ "$N" != "15" && "$N" != "25" && "$N" != "40" ]]; then
   exit 1
 fi
 
-ROOT=/home/atorre/UTSP/unione/git/UTSP
+ROOT=${UTSP_ROOT}
 PERT=$ROOT/PERT
 VENV=$ROOT/venv
 PYPATH=$ROOT/common
@@ -47,13 +48,6 @@ wrap_cmd() {
     export TESI_EXPERIMENT=PERT
     export TESI_N_NODES=$N
     cd $PERT
-    echo '===== DEBUG GUROBI ====='
-    module list
-    which gurobi_cl || true
-    gurobi_cl --version || true
-    env | grep -i gurobi || true
-    env | grep -i grb || true
-    python -c 'import gurobipy as gp; print(\"gurobipy\", gp.gurobi.version()); print(gp.__file__)'
 
     python gurobi_parallelo.py $1
   "

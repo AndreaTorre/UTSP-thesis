@@ -9,11 +9,11 @@ Uso:
     python audit_imports.py <cartella_esperimento> <cartella_common>
 
 Esempio:
-    python audit_imports.py /home/atorre/UTSP/unione/git/UTSP/PERT \
-                             /home/atorre/UTSP/unione/git/UTSP/common
+    python audit_imports.py $UTSP_ROOT/PERT \
+                             $UTSP_ROOT/common
 
-    python audit_imports.py /home/atorre/UTSP/unione/git/UTSP/CVETT \
-                             /home/atorre/UTSP/unione/git/UTSP/common
+    python audit_imports.py $UTSP_ROOT/CVETT \
+                             $UTSP_ROOT/common
 
 Non serve alcuna libreria esterna: solo ast/pathlib della stdlib.
 """

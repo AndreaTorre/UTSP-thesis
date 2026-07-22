@@ -3,10 +3,8 @@ import argparse
 import pickle
 from common import load_data, load_env, set_seed
 from experiment_B import run_esperimento_B
-import torch  
 from utsp import run_esperimento_B_UTSP
 import os
-import hashlib
 
 
 
@@ -57,10 +55,7 @@ def main():
     if args.only == "B":
         return risultati
 
-    if args.only == "B_UTSP_LS":
-        mode = "local_search"
-    else:
-        mode = "local_search"
+    mode = "local_search"
 
     risultati["B_UTSP"] = run_esperimento_B_UTSP(
         nodes, coords, base_dist, E, root, env, res_B=risultati["B"],

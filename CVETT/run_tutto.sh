@@ -1,4 +1,5 @@
 #!/bin/bash
+UTSP_ROOT="${TESI_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # CVETT/run_tutto.sh — Pipeline parallela esperimento B per CVETT
 # Uso: bash run_tutto.sh 15|25|40
 #
@@ -9,7 +10,7 @@ set -euo pipefail
 
 N=${1:-${TESI_N_NODES:-40}}
 
-ROOT=/home/atorre/UTSP/unione/git/UTSP
+ROOT=${UTSP_ROOT}
 CVETT=$ROOT/CVETT
 VENV=$ROOT/venv
 PYPATH=$ROOT/common
@@ -43,13 +44,6 @@ wrap_cmd() {
 
     cd $CVETT
 
-    echo '===== DEBUG GUROBI ====='
-    module list
-    which gurobi_cl || true
-    gurobi_cl --version || true
-    env | grep -i gurobi || true
-    env | grep -i grb || true
-    python -c 'import gurobipy as gp; print(\"gurobipy\", gp.gurobi.version()); print(gp.__file__)'
 
     python gurobi_parallelo.py $1
   "

@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
 
-from config import VALIDATION_SEED, EEV_TIME_LIMIT, EEV_MIP_GAP
+from config import VALIDATION_SEED
 from common import out_path
 from tsp_utils import canon_edge, get_edge_value
 from scenarios import generate_scenarios

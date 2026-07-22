@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+UTSP_ROOT="${TESI_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # collect_cvett_results.sh
 #
 # Raccoglie, per ogni esperimento CVETT (ogni cartella
@@ -18,7 +19,7 @@
 #   ./collect_cvett_results.sh [CVETT_ROOT] [OUT_CSV]
 #
 # Default:
-#   CVETT_ROOT = /home/atorre/UTSP/unione/git/UTSP/CVETT
+#   CVETT_ROOT = ${UTSP_ROOT}/CVETT
 #   OUT_CSV   = ./cvett_batch_sweep_summary.csv
 #
 # NOTA: skewness/curtosi sono calcolate qui (non nel codice Python del progetto)
@@ -27,7 +28,7 @@
 
 set -uo pipefail   # niente -e: i grep "a vuoto" sono normali (campi mancanti -> nan/vuoto), non devono killare lo script
 
-CVETT_ROOT="${1:-/home/atorre/UTSP/unione/git/UTSP/CVETT}"
+CVETT_ROOT="${1:-${UTSP_ROOT}/CVETT}"
 OUT_CSV="${2:-./cvett_batch_sweep_summary.csv}"
 
 STATS_FILENAME="espB_wind_UTSP_LS_cost_distributions_train_stats.txt"

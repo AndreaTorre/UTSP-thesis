@@ -1,4 +1,5 @@
 #!/bin/bash
+UTSP_ROOT="${TESI_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # Lancia lo sweep su UTSP_BATCH_SIZE per un esperimento/dimensione dati.
 #
 # Uso:

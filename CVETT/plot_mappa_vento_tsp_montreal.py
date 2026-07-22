@@ -12,10 +12,10 @@ Caratteristiche:
 - mappa i nodi TSP nello stesso rettangolo geografico del campo ERA5.
 
 Uso:
-    cd /home/atorre/UTSP/unione/git/UTSP/CVETT
+    cd $UTSP_ROOT/CVETT
 
-    source /home/atorre/UTSP/unione/git/UTSP/venv/bin/activate
-    export PYTHONPATH=/home/atorre/UTSP/unione/git/UTSP/common:$PYTHONPATH
+    source $UTSP_ROOT/venv/bin/activate
+    export PYTHONPATH=$UTSP_ROOT/common:$PYTHONPATH
 
     TESI_EXPERIMENT=CVETT TESI_N_NODES=25 python plot_mappa_vento_tsp_montreal.py
 """
@@ -23,7 +23,7 @@ Uso:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -31,9 +31,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from common.common import load_data
-from common.config import ERA5_NC_PATH, OUTPUT_DIR
-from common.wind_perturbation import load_wind_field
+from common import load_data
+from config import ERA5_NC_PATH, OUTPUT_DIR
+from wind_perturbation import load_wind_field
 
 
 # =============================================================================

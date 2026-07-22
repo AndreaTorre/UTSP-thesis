@@ -1,4 +1,5 @@
 #!/bin/bash
+UTSP_ROOT="${TESI_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # run_variant_sweep.sh — allena il batch sweep per le 4 combinazioni della loss
 # (penalty on/off) x (aggregation sum/mean), ognuna nel suo albero isolato.
 #
@@ -23,7 +24,7 @@ module load python
 module load gurobi/13.0.0
 unset GRB_WLSACCESSID GRB_WLSSECRET GRB_LICENSEID
 
-ROOT=/home/atorre/UTSP/unione/git/UTSP
+ROOT=${UTSP_ROOT}
 source "$ROOT/venv/bin/activate"
 export PYTHONPATH="$ROOT/common:$PYTHONPATH"
 cd "$ROOT/common"

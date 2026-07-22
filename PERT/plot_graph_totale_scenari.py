@@ -30,7 +30,8 @@ import numpy as np
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 
-PROJECT_ROOT = "/home/atorre/UTSP/unione/git/UTSP"
+PROJECT_ROOT = os.environ.get("TESI_ROOT_DIR",
+                              os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 COMMON_DIR = os.path.join(PROJECT_ROOT, "common")
 PERT_DIR = os.path.join(PROJECT_ROOT, "PERT")
 

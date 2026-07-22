@@ -15,6 +15,14 @@ import math
 import numpy as np
 import h5py
 
+# NOTA: le costanti drone esistono solo in CVETT/config_backend.py. Sul ramo
+# PERT questo modulo viene importato da scenarios.py ma non usato: import
+# protetto per non far esplodere la pipeline PERT.
+try:
+    from config import DRONE_U, DRONE_A0, DRONE_A2, DRONE_A3
+except ImportError:
+    DRONE_U = DRONE_A0 = DRONE_A2 = DRONE_A3 = None
+
 # ---------------------------------------------------------------------------
 # CARICAMENTO
 # ---------------------------------------------------------------------------

@@ -10,7 +10,6 @@ niente note diagnostiche. Per l'analisi tecnica completa usare full_report.py.
 Scrive: <root>/sweep_analysis/presentazione_<EXP>_<N>nodi.txt
 """
 import argparse
-import math
 import os
 import statistics as st
 import sys

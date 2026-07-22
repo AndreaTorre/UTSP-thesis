@@ -26,7 +26,8 @@ import os
 import re
 import sys
 
-PROJECT_ROOT = os.environ.get("TESI_ROOT_DIR", "/home/atorre/UTSP/unione/git/UTSP")
+PROJECT_ROOT = os.environ.get("TESI_ROOT_DIR",
+                              os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 COMMON_DIR = os.path.join(PROJECT_ROOT, "common")
 sys.path.insert(0, COMMON_DIR)
 

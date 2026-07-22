@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+UTSP_ROOT="${TESI_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # collect_pert_results.sh
 #
 # Raccoglie, per ogni esperimento PERT (ogni cartella
@@ -18,7 +19,7 @@
 #   ./collect_pert_results.sh [PERT_ROOT] [OUT_CSV]
 #
 # Default:
-#   PERT_ROOT = /home/atorre/UTSP/unione/git/UTSP/PERT
+#   PERT_ROOT = ${UTSP_ROOT}/PERT
 #   OUT_CSV   = ./pert_batch_sweep_summary.csv
 #
 # NOTA: skewness/curtosi sono calcolate qui (non nel codice Python del progetto)
@@ -27,7 +28,7 @@
 
 set -uo pipefail   # niente -e: i grep "a vuoto" sono normali (campi mancanti -> nan/vuoto), non devono killare lo script
 
-PERT_ROOT="${1:-/home/atorre/UTSP/unione/git/UTSP/PERT}"
+PERT_ROOT="${1:-${UTSP_ROOT}/PERT}"
 OUT_CSV="${2:-./pert_batch_sweep_summary.csv}"
 
 STATS_FILENAME="espB_UTSP_LS_cost_distributions_train_stats.txt"

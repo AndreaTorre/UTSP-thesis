@@ -1,4 +1,3 @@
-import os
 import sys
 import runpy
 from pathlib import Path

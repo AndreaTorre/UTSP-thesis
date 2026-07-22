@@ -1,10 +1,7 @@
-#!/bin/bash
-module load python
-module load gurobi/13.0.0
-unset GRB_WLSACCESSID GRB_WLSSECRET GRB_LICENSEID
-source /home/atorre/UTSP/unione/git/UTSP/venv/bin/activate
-export PYTHONPATH=/home/atorre/UTSP/unione/git/UTSP/common:$PYTHONPATH
-cd /home/atorre/UTSP/unione/git/UTSP/common
-export TESI_EXPERIMENT=PERT
-export TESI_N_NODES=$1
-python compute_ws_shard.py --shard $2 --n-shards 20
+#!/usr/bin/env bash
+# Uso: bash run_ws.sh <N_NODI> <SHARD> [N_SHARDS]
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+export TESI_EXPERIMENT="${TESI_EXPERIMENT:-PERT}"
+export TESI_N_NODES="${1:?N nodi mancante}"
+python compute_ws_shard.py --shard "${2:?shard mancante}" --n-shards "${3:-20}"

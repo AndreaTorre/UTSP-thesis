@@ -28,7 +28,7 @@ from config import (
     N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC, FINAL_SCENARIO_SEED,
     N_VALIDATION_SCENARIOS,
 )
-from tsp_utils import base_cost_undirected, canon_edge, get_edge_value
+from tsp_utils import base_cost_undirected
 from gurobi_models import (
     build_I_from_medoid_outgoing_nodes,
     solve_exact_tsp,

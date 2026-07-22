@@ -21,7 +21,8 @@ from pathlib import Path
 # iperparametri, costanti dipendenti da N_NODES, parametri vento.
 # ============================================================
 
-ROOT_DIR = Path(os.getenv("TESI_ROOT_DIR", "/home/atorre/UTSP/unione/git/UTSP"))
+# ROOT_DIR si autodetermina da questo file (common/config.py -> parent.parent).
+ROOT_DIR = Path(os.getenv("TESI_ROOT_DIR") or Path(__file__).resolve().parent.parent)
 
 EXPERIMENT = os.getenv("TESI_EXPERIMENT", "PERT").upper()
 N_NODES = int(os.getenv("TESI_N_NODES", "40"))
@@ -45,10 +46,10 @@ DATA_FILE_FALLBACK = DATA_FILE_PRIMARY
 EXPERIMENT_DIR = ROOT_DIR / EXPERIMENT
 OUTPUT_DIR = str(EXPERIMENT_DIR / f"RISULTATI_{N_NODES}")
 
+# NOTA: rimosso TESI_UTSP_VARIANT, mai esportata da nessuno script: la
+# variante effettiva e' TESI_VARIANT, gestita piu' sotto. Un livello di
+# nesting in meno. BASE_OUTPUT_DIR resta: serve a TEST_SCENARIO_CACHE_DIR.
 BASE_OUTPUT_DIR = OUTPUT_DIR
-UTSP_VARIANT = os.getenv("TESI_UTSP_VARIANT", "").strip()
-if UTSP_VARIANT:
-    OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, UTSP_VARIANT)
 
 # Cartella condivisa per la cache degli scenari di test (PI/perturbazioni).
 # NOTA: fissa apposta, non segue batch_sweep né la sottocartella di test:
@@ -111,9 +112,8 @@ _penalty_env = os.getenv("TESI_UTSP_INCLUDE_PENALTY")
 if _penalty_env is not None:
     UTSP2_INCLUDE_PENALTY = _penalty_env.strip().lower() in {"1", "true", "yes"}
 
-UTSP2_AGGREGATION = os.getenv("TESI_UTSP_AGGREGATION", "sum").strip().lower()
-if UTSP2_AGGREGATION not in {"sum", "mean"}:
-    raise ValueError(f"TESI_UTSP_AGGREGATION non valido: {UTSP2_AGGREGATION}")
+# NOTA: UTSP2_AGGREGATION rimosso: era importato da utsp.py e
+# two_stage_utsp_loss.py ma non compariva in nessuna espressione.
 
 # ============================================================
 # Batch sweep satellite (opzionale)

@@ -1,0 +1,8 @@
+ALBERO DELLA CARTELLA PERT
+==========================
+PERT  [error opening dir]
+
+0 directories, 0 files
+
+NUMERO DI FILE DIRETTAMENTE PRESENTI IN OGNI CARTELLA
+=====================================================

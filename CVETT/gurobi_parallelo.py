@@ -32,7 +32,7 @@ from config import (
     WIND_NC_PATH,   # percorso del file NetCDF del vento
     DRONE_U,        # ground speed nominale del drone in m/s
 )
-from tsp_utils import base_cost_undirected, canon_edge, get_edge_value
+from tsp_utils import base_cost_undirected
 from gurobi_models import (
     build_I_from_medoid_outgoing_nodes,
     solve_exact_tsp,

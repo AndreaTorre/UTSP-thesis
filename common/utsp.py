@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
 import time
-import math
-import random
 import json
 import numpy as np
 import torch
@@ -10,24 +8,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+# NOTA: ripulito. I parametri UTSP_LS_* e TEST_SCENARIO_* sono usati da
+# local_search.py, non qui. UTSP2_ALPHA_LOSS/ALPHA_DECODE non erano usati da
+# nessuna parte: vale solo UTSP2_LS_ALPHA.
 from config import (
-    OUTPUT_DIR, TRAIN_OUTPUT_DIR, N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC,  UTSP_BATCH_SIZE,
-    N_TRAINING_SCENARIOS_UTSP, TRAIN_SCENARIO_IDS_UTSP, DROP_LAST_TRAIN_BATCH,
-    UTSP_TRAINING_SEED, TEST_SCENARIO_IDS_UTSP, N_TEST_SCENARIOS_UTSP, TEST_SCENARIO_SEED, 
+    OUTPUT_DIR, TRAIN_OUTPUT_DIR, N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC, UTSP_BATCH_SIZE,
+    TRAIN_SCENARIO_IDS_UTSP, DROP_LAST_TRAIN_BATCH, UTSP_TRAINING_SEED,
     UTSP2_HIDDEN, UTSP2_NLAYERS, UTSP2_EPOCHS, UTSP2_LR, UTSP2_STEP_LR, UTSP2_LOG_FREQ,
-    UTSP2_LAMBDA1, UTSP2_LAMBDA2, UTSP2_LAMBDA_D, UTSP2_LAMBDA_E, UTSP2_ALPHA_DECODE,
-    UTSP2_ALPHA_LOSS, UTSP2_TEMP_MODE, UTSP2_TEMP_SCALE, UTSP2_TEMP_FIXED,
-    UTSP2_DIST_SCALE_MODE, UTSP2_INCLUDE_PENALTY, UTSP2_INCLUDE_ENTROPY, UTSP2_LS_ALPHA, 
-    UTSP_LS_MAX_ACTIONS, UTSP_LS_ACTIONS_PER_ROUND, UTSP_LS_MAX_RESTARTS, UTSP_LS_M, UTSP2_AGGREGATION, 
-    UTSP_LS_K, UTSP_LS_BETA, UTSP_LS_RANDOM_SEED, UTSP_LS_APPLY_INITIAL_2OPT, DIM_ISTANZA_TEST, N_ISTANZE_TEST,
+    UTSP2_LAMBDA1, UTSP2_LAMBDA2, UTSP2_LAMBDA_D, UTSP2_LAMBDA_E,
+    UTSP2_TEMP_MODE, UTSP2_TEMP_SCALE, UTSP2_TEMP_FIXED,
+    UTSP2_DIST_SCALE_MODE, UTSP2_INCLUDE_PENALTY, UTSP2_INCLUDE_ENTROPY, UTSP2_LS_ALPHA,
 )
 from tsp_utils import get_edge_value
-from gurobi_models import solve_exact_tsp
-from scenarios import generate_scenarios, generate_scenario_batches
+from scenarios import generate_scenario_batches
 from evaluation import (
-    validate_policies, genera_grafici_utsp,
     plot_utsp_heatmap, plot_utsp_graph_weights, plot_utsp_random_scenario_graphs,
-    plot_cost_distributions, compute_pi_with_booking_costs,
 )
 from local_search import _run_local_search_branch, _run_utsp_test_only_branch, _heatmap_numpy_from_H_list
 from two_stage_utsp_loss import (

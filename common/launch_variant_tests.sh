@@ -1,4 +1,5 @@
 #!/bin/bash
+UTSP_ROOT="${TESI_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # launch_variant_tests.sh — lancia i test delle 4 varianti della loss in PARALLELO.
 #
 # Il parallelismo naturale del test NON è spezzare la local search (un'istanza
@@ -18,15 +19,15 @@
 
 N=${1:-15}
 DIMS=${2:-"60"}
-ROOT=/home/atorre/UTSP/unione/git/UTSP
+ROOT=${UTSP_ROOT}
 
 cat > "$ROOT/common/run_test_variant.sh" << 'EOF'
 #!/bin/bash
 module load python; module load gurobi/13.0.0
 unset GRB_WLSACCESSID GRB_WLSSECRET GRB_LICENSEID
-source /home/atorre/UTSP/unione/git/UTSP/venv/bin/activate
-export PYTHONPATH=/home/atorre/UTSP/unione/git/UTSP/common:$PYTHONPATH
-cd /home/atorre/UTSP/unione/git/UTSP/common
+source ${UTSP_ROOT}/venv/bin/activate
+export PYTHONPATH=${UTSP_ROOT}/common:$PYTHONPATH
+cd ${UTSP_ROOT}/common
 # $1=variante $2=pen $3=agg $4=N $5=batch $6=dimlist
 export TESI_EXPERIMENT=PERT TESI_N_NODES=$4
 export TESI_VARIANT=$1 TESI_UTSP_INCLUDE_PENALTY=$2 TESI_UTSP_AGGREGATION=$3
