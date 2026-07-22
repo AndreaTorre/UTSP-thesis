@@ -18,7 +18,7 @@ from config import (
     UTSP2_LAMBDA1, UTSP2_LAMBDA2, UTSP2_LAMBDA_D, UTSP2_LAMBDA_E, UTSP2_ALPHA_DECODE,
     UTSP2_ALPHA_LOSS, UTSP2_TEMP_MODE, UTSP2_TEMP_SCALE, UTSP2_TEMP_FIXED,
     UTSP2_DIST_SCALE_MODE, UTSP2_INCLUDE_PENALTY, UTSP2_INCLUDE_ENTROPY, UTSP2_LS_ALPHA, 
-    UTSP_LS_MAX_ACTIONS, UTSP_LS_ACTIONS_PER_ROUND, UTSP_LS_MAX_RESTARTS, UTSP_LS_M, 
+    UTSP_LS_MAX_ACTIONS, UTSP_LS_ACTIONS_PER_ROUND, UTSP_LS_MAX_RESTARTS, UTSP_LS_M, UTSP2_AGGREGATION, 
     UTSP_LS_K, UTSP_LS_BETA, UTSP_LS_RANDOM_SEED, UTSP_LS_APPLY_INITIAL_2OPT, DIM_ISTANZA_TEST, N_ISTANZE_TEST,
 )
 from tsp_utils import get_edge_value
@@ -26,8 +26,8 @@ from gurobi_models import solve_exact_tsp
 from scenarios import generate_scenarios, generate_scenario_batches
 from evaluation import (
     validate_policies, genera_grafici_utsp,
-    plot_utsp_heatmap, plot_utsp_graph_weights, plot_cost_distributions,
-    compute_pi_with_booking_costs,
+    plot_utsp_heatmap, plot_utsp_graph_weights, plot_utsp_random_scenario_graphs,
+    plot_cost_distributions, compute_pi_with_booking_costs,
 )
 from local_search import _run_local_search_branch, _run_utsp_test_only_branch, _heatmap_numpy_from_H_list
 from two_stage_utsp_loss import (
@@ -476,6 +476,7 @@ def _train_utsp_2stage(
 
     K_batch = batch_slices[0]["K"]
     print(f"\n  Training UTSP 2-stage | device={device} | n_params={n_par:,}")
+    print(f"\n  Training UTSP 2-stage | device={device} | n_params={n_par:,}")
     print(f"  GNN({n}→{UTSP2_HIDDEN}×{UTSP2_NLAYERS}) | "
           f"K_total={K} ({n_batches} batch × {K_batch}) | T={temperature:.4f} | scale={dist_scale:.4f}")
     print(f"  Epoche={UTSP2_EPOCHS}  lr={UTSP2_LR}  "
@@ -502,12 +503,9 @@ def _train_utsp_2stage(
             dist_list = [dist_b[k:k+1]  for k in range(K_b)]
 
             loss, comps = two_stage_utsp_loss(
-                T_list, dist_list, I_mask, p_mat, C_mat, bs["probs_t"], 
-                alpha=UTSP2_LS_ALPHA,
-                lambda1=UTSP2_LAMBDA1,
-                lambda2=UTSP2_LAMBDA2,
-                lambda_e=UTSP2_LAMBDA_E,
-                lambda_d=UTSP2_LAMBDA_D,
+                T_list, dist_list, I_mask, p_mat, C_mat, bs["probs_t"],
+                alpha=UTSP2_LS_ALPHA, lambda1=UTSP2_LAMBDA1, lambda2=UTSP2_LAMBDA2,
+                lambda_e=UTSP2_LAMBDA_E, lambda_d=UTSP2_LAMBDA_D,
                 include_penalty=UTSP2_INCLUDE_PENALTY,
                 include_entropy=UTSP2_INCLUDE_ENTROPY,
                 return_components=True,
@@ -911,38 +909,41 @@ def run_esperimento_B_UTSP(
 
     reservation_utsp = sum(get_edge_value(p, i, j) for (i, j) in x_utsp)
 
-    # Visualizzazioni heatmap e grafo pesato
+    # Visualizzazioni POST-RETE: heatmap media e grafo pesato medio
     _H_avg = _heatmap_numpy_from_H_list(H_list)
     _H_decode_vis = _H_avg.copy()
-
+    
     plot_utsp_heatmap(
         f"{exp_name}_heatmap", nodes, _H_decode_vis,
         title_suffix=f"(media {len(H_list)} scenari)",
     )
     plot_utsp_graph_weights(
         f"{exp_name}_heatmap", nodes, coords, _H_avg,
-        title_suffix=f"(media {len(H_list)} scenari)",
+        title_suffix=f"(media {len(H_list)} scenari)", I=I,
     )
-
+    
+    # POST-RETE: 5 grafi pesati scenario-specifici
+    plot_utsp_random_scenario_graphs(
+        exp_name, nodes, coords, scenario_ids_utsp, H_list, I,
+        n_samples=5, seed=UTSP_TRAINING_SEED,
+    )
+    
     print(f"\n{check_booking_coverage(x_scores, I)}")
     print(f"\n  Costo prenotazione UTSP diagnostico : {reservation_utsp:.4f}")
-
+    
     # Visualizzazione dell'adiacenza dopo il kernel
     _adj_avg = adj_stack.detach().cpu().numpy().mean(axis=0)
-
+    
     plot_utsp_heatmap(
         f"{exp_name}_adj_kernel",
         nodes,
         _adj_avg,
         title_suffix=f"(adj_stack media su {adj_stack.shape[0]} scenari — dopo kernel)",
     )
-
+    
     plot_utsp_graph_weights(
-        f"{exp_name}_adj_kernel",
-        nodes,
-        coords,
-        _adj_avg,
-        title_suffix=f"(adj_stack media su {adj_stack.shape[0]} scenari — dopo kernel)",
+        f"{exp_name}_adj_kernel", nodes, coords, _adj_avg,
+        title_suffix=f"(adj_stack media su {adj_stack.shape[0]} scenari — dopo kernel)", I=I,
     )
 
     output = {

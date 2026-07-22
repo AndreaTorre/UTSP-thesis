@@ -1094,6 +1094,23 @@ def _save_sto_eev_cache(state_key, results_by_sid):
     os.replace(tmp_path, path)
 
 
+
+def _load_pool_costs():
+    """Carica i costi del pool (test_pool_cache.pkl) se esiste, per scenario_id.
+    Ritorna {} se il pool non c'è: in quel caso STO/EEV si risolvono con Gurobi
+    come prima (nessun cambiamento di comportamento)."""
+    import os as _os
+    import pickle as _pickle
+    path = _os.path.join(TEST_SCENARIO_CACHE_DIR, "test_pool_cache.pkl")
+    if not _os.path.exists(path):
+        return {}
+    try:
+        with open(path, "rb") as f:
+            return _pickle.load(f).get("results", {})
+    except Exception:
+        return {}
+
+
 def _validate_policies_cached(
     nodes, E, I, p, C, root, env,
     x_sto, x_ev, results_by_sid, scenario_ids,
@@ -1123,6 +1140,28 @@ def _validate_policies_cached(
     cache = _load_sto_eev_cache(state_key)
 
     missing_ids = [sid for sid in scenario_ids if sid not in cache]
+
+    # Aggancio al POOL: se test_pool_cache.pkl contiene STO/EEV già risolti
+    # per questi scenario_id (stesso seme, stessi scenari), li prendiamo da lì
+    # invece di ririsolverli con Gurobi. È esattamente ciò che serve per
+    # valutare UTSP sugli STESSI scenari su cui girano WS/STO/EEV del pool.
+    if missing_ids:
+        pool = _load_pool_costs()
+        if pool:
+            agganciati = 0
+            for sid in list(missing_ids):
+                pr = pool.get(sid)
+                if pr and pr.get("STO", {}).get("cost") is not None \
+                       and pr.get("EEV", {}).get("cost") is not None:
+                    cache[sid] = {"sto_cost": pr["STO"]["cost"],
+                                  "eev_cost": pr["EEV"]["cost"]}
+                    agganciati += 1
+            if agganciati:
+                print(f"  STO/EEV: {agganciati} scenari agganciati dal pool "
+                      f"(nessun Gurobi)")
+                _save_sto_eev_cache(state_key, cache)
+                missing_ids = [sid for sid in scenario_ids if sid not in cache]
+
     if missing_ids:
         print(f"  STO/EEV: {len(missing_ids)} scenari da risolvere con Gurobi "
               f"({len(scenario_ids) - len(missing_ids)} già in cache)")
@@ -1392,6 +1431,7 @@ def _write_utsp_test_only_stats_file(
     PI_test, PI_pren_test, UTSP_LS_test, STO_test, EEV_test,
     gap_ls_sto, gap_ls_eev, gap_ls_pi,
     history, temperature, dist_scale,
+    idx=0, n_istanze=1, base_exp_name=None,
 ):
     def fmt(x):
         if x is None:
@@ -1401,7 +1441,11 @@ def _write_utsp_test_only_stats_file(
         except Exception:
             return str(x)
 
+    # blocco di questa istanza; l'header globale è scritto solo alla prima
     lines = [
+        "#" * 90,
+        f"# ISTANZA {idx}",
+        "#" * 90,
         "=" * 90,
         "DIAGNOSTICA UTSP TEST-ONLY",
         "=" * 90,
@@ -1444,13 +1488,17 @@ def _write_utsp_test_only_stats_file(
 
     lines.append("=" * 90)
 
+    # UN SOLO file per cella (tutte le istanze accodate), sotto grafici/.
+    # base_exp_name è il nome della cella SENZA l'indice istanza.
     grafici_dir = os.path.join(OUTPUT_DIR, "grafici")
     os.makedirs(grafici_dir, exist_ok=True)
-    stats_file = os.path.join(grafici_dir, f"{exp_name}_test_only_stats.txt")
-    with open(stats_file, "w", encoding="utf-8") as f:
+    base = base_exp_name or exp_name
+    stats_file = os.path.join(grafici_dir, f"{base}_test_all_instances.txt")
+    mode = "w" if idx == 0 else "a"      # prima istanza sovrascrive, poi accoda
+    with open(stats_file, mode, encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-
-    print(f"  → Diagnostica UTSP test-only scritta in: {stats_file}")
+    if idx == n_istanze - 1:
+        print(f"  → Diagnostica test-only ({n_istanze} istanze) in: {stats_file}")
 
 
 def _run_utsp_test_only_branch(
@@ -1593,6 +1641,9 @@ def _run_utsp_test_only_branch(
             history=history or {"loss": []},
             temperature=temperature,
             dist_scale=dist_scale,
+            idx=idx,
+            n_istanze=len(istanze_test),
+            base_exp_name=f"{exp_name}_test_only",
         )
 
         istanza_metrics.append({
@@ -1649,6 +1700,59 @@ def _run_utsp_test_only_branch(
         "istanze_test_output": istanza_outputs,
         "aggregato_test": agg_test,
     }
+
+
+
+def _append_test_instance_block(exp_name, idx, n_istanze, x_test,
+                                scenario_ids, test_pre_costs, test_post_costs,
+                                test_post_tc, test_post_pc, test_post_tours,
+                                PI_test, UTSP_LS_test, STO_test, EEV_test,
+                                gap_ls_sto, gap_ls_eev, gap_ls_pi):
+    """Scrive il blocco TEST di UNA istanza, accodandolo a un UNICO file per
+    cella (grafici/<exp>_test_all_instances.txt). Sostituisce i ~300 file
+    per-istanza: un solo file, leggibile in un colpo da full_report.
+    Formato allineato a FIELD_RE / X_RE / SCEN_RE di full_report: NON cambiare
+    le etichette 'UTSP test =', 'x_test =', né lo schema colonne."""
+    def fmt(x):
+        if x is None:
+            return "N/A"
+        try:
+            return f"{float(x):.6f}"
+        except Exception:
+            return str(x)
+
+    lines = [
+        "#" * 90,
+        f"# ISTANZA {idx}",
+        "#" * 90,
+        f"x_test = {sorted(x_test or [])}",
+        "RISULTATI TEST",
+        f"  PI test   = {fmt(PI_test)}",
+        f"  UTSP test = {fmt(UTSP_LS_test)}",
+        f"  STO test  = {fmt(STO_test)}",
+        f"  EEV test  = {fmt(EEV_test)}",
+        f"  Gap UTSP vs STO = {fmt(gap_ls_sto)}%",
+        f"  Gap UTSP vs EEV = {fmt(gap_ls_eev)}%",
+        f"  Gap UTSP vs PI  = {fmt(gap_ls_pi)}%",
+        "COSTI TEST SCENARIO PER SCENARIO",
+        f"  {'scenario':>8} | {'pre_total':>12} | {'post_total':>12} | "
+        f"{'post_perc':>12} | {'post_multa':>12} | tour post",
+    ]
+    for sid in scenario_ids:
+        lines.append(
+            f"  {str(sid):>8} | {fmt(test_pre_costs.get(sid)):>12} | "
+            f"{fmt(test_post_costs.get(sid)):>12} | {fmt(test_post_tc.get(sid)):>12} | "
+            f"{fmt(test_post_pc.get(sid)):>12} | {test_post_tours.get(sid, [])}"
+        )
+
+    grafici_dir = os.path.join(OUTPUT_DIR, "grafici")
+    os.makedirs(grafici_dir, exist_ok=True)
+    stats_file = os.path.join(grafici_dir, f"{exp_name}_test_all_instances.txt")
+    mode = "w" if idx == 0 else "a"
+    with open(stats_file, mode, encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    if idx == n_istanze - 1:
+        print(f"  → Diagnostica test ({n_istanze} istanze) in: {stats_file}")
 
 
 def _run_local_search_branch(
@@ -1811,40 +1915,18 @@ def _run_local_search_branch(
               f"UTSP={UTSP_LS_test:.4f} STO={STO_test:.4f} EEV={EEV_test:.4f}")
         print(f"    Gap vs STO={gap_ls_sto:+.2f}% vs EEV={gap_ls_eev:+.2f}% vs PI={gap_ls_pi:+.2f}%")
 
-        _save_utsp_ls_summary(
-            exp_name=exp_name_i,
-            scenario_ids=scenario_ids_test,
-            results=results_test,
-            x_ls=x_test,
-            costs_train=test_post_costs, tc_train=test_post_tc, pc_train=test_post_pc,
-            tours_train=test_post_tours,
-            UTSP_LS_train=UTSP_LS_train,
-            UTSP_LS_val=UTSP_LS_test,
-            PI_train=PI_train_eval, STO_train=STO_train, EEV_train=EEV_train,
-            PI_pren_train=PI_pren_train,
-            PI_val=PI_test, STO_val=STO_test, EEV_val=EEV_test,
-            PI_pren_val=PI_pren_test,
-            gap_ls_sto=gap_ls_sto, gap_ls_eev=gap_ls_eev, gap_ls_pi=gap_ls_pi,
-            history=history, temperature=temperature,
-        )
-
-        _write_utsp_pipeline_stats_file(
-            exp_name=exp_name_i,
-            train_ids=scenario_ids, train_probs=scenario_probs, train_batch_id=train_batch_id,
-            train_pre_costs=train_pre_costs, train_pre_tc=train_pre_tc, train_pre_pc=train_pre_pc,
-            train_pre_tours=train_pre_tours,
-            train_post_costs=train_post_costs, train_post_tc=train_post_tc, train_post_pc=train_post_pc,
-            train_post_tours=train_post_tours,
-            train_PI=PI_train_eval, train_PI_pren=PI_pren_train, train_UTSP=UTSP_LS_train,
-            x_train=x_train,
-            test_ids=scenario_ids_test, test_probs=scenario_probs_test,
-            test_pre_costs=test_pre_costs, test_pre_tc=test_pre_tc, test_pre_pc=test_pre_pc,
-            test_pre_tours=test_pre_tours,
-            test_post_costs=test_post_costs, test_post_tc=test_post_tc, test_post_pc=test_post_pc,
+        # UN SOLO blocco leggero per istanza, accodato al file unico della cella.
+        # (Le diagnostiche pesanti train/pipeline si scrivono UNA volta, fuori dal
+        #  loop: erano identiche a ogni istanza e duplicavano ~50MB per cella.)
+        _append_test_instance_block(
+            exp_name=exp_name, idx=idx, n_istanze=len(istanze_test),
+            x_test=x_test, scenario_ids=scenario_ids_test,
+            test_pre_costs=test_pre_costs, test_post_costs=test_post_costs,
+            test_post_tc=test_post_tc, test_post_pc=test_post_pc,
             test_post_tours=test_post_tours,
-            test_PI=PI_test, test_PI_pren=PI_pren_test, test_UTSP=UTSP_LS_test,
-            x_test=x_test,
-            history=history, temperature=temperature,
+            PI_test=PI_test, UTSP_LS_test=UTSP_LS_test,
+            STO_test=STO_test, EEV_test=EEV_test,
+            gap_ls_sto=gap_ls_sto, gap_ls_eev=gap_ls_eev, gap_ls_pi=gap_ls_pi,
         )
 
         istanza_metrics.append({

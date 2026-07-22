@@ -45,11 +45,16 @@ DATA_FILE_FALLBACK = DATA_FILE_PRIMARY
 EXPERIMENT_DIR = ROOT_DIR / EXPERIMENT
 OUTPUT_DIR = str(EXPERIMENT_DIR / f"RISULTATI_{N_NODES}")
 
+BASE_OUTPUT_DIR = OUTPUT_DIR
+UTSP_VARIANT = os.getenv("TESI_UTSP_VARIANT", "").strip()
+if UTSP_VARIANT:
+    OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, UTSP_VARIANT)
+
 # Cartella condivisa per la cache degli scenari di test (PI/perturbazioni).
 # NOTA: fissa apposta, non segue batch_sweep né la sottocartella di test:
 # il PI di uno scenario_id non dipende dal batch size della rete né da
 # quante istanze/DIM stai testando, quindi la cache va condivisa da tutti.
-TEST_SCENARIO_CACHE_DIR = os.path.join(OUTPUT_DIR, "pkl")
+TEST_SCENARIO_CACHE_DIR = os.path.join(BASE_OUTPUT_DIR, "pkl")
 
 WIND_NC_PATH_TRAIN = str(CVETT_DATA_DIR / "cvett_train.nc")
 WIND_NC_PATH_TEST = str(CVETT_DATA_DIR / "cvett_test.nc")
@@ -101,6 +106,14 @@ _spec.loader.exec_module(_backend)
 for _name in dir(_backend):
     if _name.isupper():
         globals()[_name] = getattr(_backend, _name)
+        
+_penalty_env = os.getenv("TESI_UTSP_INCLUDE_PENALTY")
+if _penalty_env is not None:
+    UTSP2_INCLUDE_PENALTY = _penalty_env.strip().lower() in {"1", "true", "yes"}
+
+UTSP2_AGGREGATION = os.getenv("TESI_UTSP_AGGREGATION", "sum").strip().lower()
+if UTSP2_AGGREGATION not in {"sum", "mean"}:
+    raise ValueError(f"TESI_UTSP_AGGREGATION non valido: {UTSP2_AGGREGATION}")
 
 # ============================================================
 # Batch sweep satellite (opzionale)
@@ -108,6 +121,13 @@ for _name in dir(_backend):
 # TESI_BATCH_SWEEP, se settata, sposta l'output sotto
 # OUTPUT_DIR/batch_sweep/BATCH_<size>/ e forza UTSP_BATCH_SIZE
 # a quel valore. Se non settata, nessun cambiamento.
+
+_variant = os.getenv("TESI_VARIANT")
+if _variant is not None:
+    OUTPUT_DIR = os.path.join(OUTPUT_DIR, "variants", _variant)
+    TEST_SCENARIO_CACHE_DIR = os.path.join(OUTPUT_DIR, "pkl")
+    for _subdir in ("output", "grafici", "checkpoint", "pkl"):
+        os.makedirs(os.path.join(OUTPUT_DIR, _subdir), exist_ok=True)
 
 _batch_sweep = os.getenv("TESI_BATCH_SWEEP")
 if _batch_sweep is not None:

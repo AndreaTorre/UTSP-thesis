@@ -17,6 +17,7 @@
 #   bash run_test_sweep.sh PERT                      # solo PERT, tutti gli N_NODES
 #   bash run_test_sweep.sh PERT 25                   # solo PERT, 25 nodi
 #   bash run_test_sweep.sh PERT 25 "300 100 70 60 30 20"   # DIM custom
+#   bash run_test_sweep.sh PERT 25 "60" 40           # solo BATCH_40, solo DIM=60
 #
 # Output di ogni combinazione:
 #   <EXP>/RISULTATI_<N>/batch_sweep/BATCH_<X>/test/IS_100_DIM_<dim>/
@@ -42,6 +43,7 @@ SKIP_PI=${TESI_TEST_SKIP_PI:-1}
 FILTER_EXP=${1:-}
 FILTER_N=${2:-}
 read -ra DIM_VALUES <<< "${3:-300 100 70 60 30 20}"
+FILTER_BATCH=${4:-}
 
 source "$ROOT/venv/bin/activate"
 export PYTHONPATH="$ROOT/common:$PYTHONPATH"
@@ -52,22 +54,58 @@ cd "$ROOT/common"
 # solo estetico, riduce il tempo totale della coda.
 find "$ROOT" -type f -path "*/batch_sweep/BATCH_*/train/*/utsp_model.pt" | sort | while read -r ckpt; do
 
-  if [[ ! "$ckpt" =~ /(PERT|CVETT)/RISULTATI_([0-9]+)/batch_sweep/BATCH_([0-9]+)/train/([^/]+)/utsp_model\.pt$ ]]; then
+  if [[ ! "$ckpt" =~ /(PERT|CVETT)/RISULTATI_([0-9]+)/(variants/[^/]+/)?batch_sweep/BATCH_([0-9]+)/train/([^/]+)/utsp_model\.pt$ ]]; then
     echo "  Salto (path inatteso, non combacia con lo schema noto): $ckpt"
     continue
   fi
   exp="${BASH_REMATCH[1]}"
   n_nodes="${BASH_REMATCH[2]}"
-  batch_x="${BASH_REMATCH[3]}"
-  train_name="${BASH_REMATCH[4]}"
+  variant_seg="${BASH_REMATCH[3]}"   # "variants/<nome>/" oppure vuoto
+  batch_x="${BASH_REMATCH[4]}"
+  train_name="${BASH_REMATCH[5]}"
+
+  # FILTRO_VARIANTE: se TESI_VARIANT è settata, testa SOLO i checkpoint di
+  # quella variante. Senza, il find trova i checkpoint di tutte le varianti
+  # e il job li testerebbe con l'ambiente sbagliato, mescolando i risultati.
+  if [ -n "${TESI_VARIANT:-}" ]; then
+    if [ "$variant_seg" != "variants/${TESI_VARIANT}/" ]; then
+      continue
+    fi
+  else
+    if [ -n "$variant_seg" ]; then
+      continue   # senza TESI_VARIANT, ignora i checkpoint dentro variants/
+    fi
+  fi
 
   if [[ -n "$FILTER_EXP" && "$exp" != "$FILTER_EXP" ]]; then continue; fi
   if [[ -n "$FILTER_N" && "$n_nodes" != "$FILTER_N" ]]; then continue; fi
+  if [[ -n "$FILTER_BATCH" && "$batch_x" != "$FILTER_BATCH" ]]; then continue; fi
 
   for dim in "${DIM_VALUES[@]}"; do
     out_tag="IS_${N_ISTANZE_TEST}_DIM_${dim}"
-    log_dir="$ROOT/$exp/RISULTATI_${n_nodes}/batch_sweep/BATCH_${batch_x}/test"
+    batch_dir="$ROOT/$exp/RISULTATI_${n_nodes}/${variant_seg}batch_sweep/BATCH_${batch_x}"
+    log_dir="$batch_dir/test"
     mkdir -p "$log_dir"
+
+    # Ripresa dopo timeout: se la combinazione ha già tutte le IS istanze
+    # (un file di stats per istanza), saltala. Le cache Gurobi sopravvivono
+    # al timeout, ma la local search no: senza questo guard un rilancio
+    # rifarebbe da zero anche le combinazioni già complete.
+    # NOTA: il test -d è necessario. Con `set -euo pipefail`, un find su una
+    # cartella inesistente esce 1, pipefail propaga il fallimento e lo script
+    # muore in silenzio — cioè a ogni combinazione nuova.
+    done_dir="$batch_dir/test/${out_tag}/grafici"
+    n_done=0
+    if [ -d "$done_dir" ]; then
+      n_done=$(find "$done_dir" -maxdepth 1 -name "*_test_only_i*_test_only_stats.txt" | wc -l)
+    fi
+    if [ "$n_done" -ge "$N_ISTANZE_TEST" ]; then
+      echo "=== ${exp} | ${n_nodes} nodi | BATCH_${batch_x} | ${out_tag} — GIÀ COMPLETA ($n_done istanze), salto ==="
+      continue
+    fi
+    if [ "$n_done" -gt 0 ]; then
+      echo "    (combinazione parziale: $n_done/${N_ISTANZE_TEST} istanze — viene rifatta da capo)"
+    fi
 
     echo ""
     echo "=== ${exp} | ${n_nodes} nodi | BATCH_${batch_x} | train=${train_name} | ${out_tag} ==="

@@ -3,6 +3,7 @@
 
 import math
 import torch
+from config import UTSP2_AGGREGATION
 import torch.nn.functional as F
 
 
@@ -171,21 +172,21 @@ def _loss_distance(H_list, dist_list, scenario_probs):
 # inquesto modo la prenotazione funziona che:
 # se prenoto i,j allora pago p; se prenoto j,i pago p; se entrambi sono alti, pago al massimo p
 # Nuovo rispetto al paper
-def _loss_booking(H_list, p_mat, I_mask, alpha):
-    H_stack = torch.stack([H.squeeze(0) for H in H_list], dim=0)  # (K, n, n)
-    H_sum = H_stack.sum(dim=0) # (n, n)
-    
-    n = H_sum.size(0)
-    cost = torch.tensor(0.0, device=H_sum.device)  
-                
+def _loss_booking(H_list, p_mat, I_mask, alpha, H_bar):
+    # saturazione su H_bar (media pesata, indipendente dal numero di scenari)
+    H_agg = H_bar.squeeze(0)
+
+    n = H_agg.size(0)
+    cost = torch.tensor(0.0, device=H_agg.device)
+
     for ii in range(n):
         for jj in range(ii + 1, n):
             if bool(I_mask[ii, jj].item()):
-                S_ij = H_sum[ii, jj] + H_sum[jj, ii]
+                S_ij = H_agg[ii, jj] + H_agg[jj, ii]
                 activation = 1.0 - torch.exp(-alpha * S_ij)
                 cost = cost + p_mat[ii, jj] * activation
 
-    return cost
+    return len(H_list) * cost    #moltiplicato per la cardinalità di Omega (#numero di scenari)
 
 # penalizzo la variabilità/differenza di una data heatmap in base alla heatmap media
 # cerco un accordo tra i valori degli scenari, in particolare archi in I
@@ -225,39 +226,40 @@ def _loss_asymmetry(H_list, scenario_probs):
 
 # penalità: se uso un arco in I ma non l ho prenotato pago una penalità
 # nuovo rispetto al paper
-def _loss_penalty(H_list, C_mat, I_mask, scenario_probs, alpha):
-    H_stack = torch.stack([H.squeeze(0) for H in H_list], dim=0)  # (K, n, n)
-    H_sum = H_stack.sum(dim=0) # (n, n)
+def _loss_penalty(H_list, C_mat, I_mask, scenario_probs, alpha, H_bar):
+    H_agg = H_bar.squeeze(0)
 
-    n = H_sum.size(0)
-    loss = torch.tensor(0.0, device=H_sum.device)
+    n = H_agg.size(0)
+    loss = torch.tensor(0.0, device=H_agg.device)
 
     for ii in range(n):
         for jj in range(ii + 1, n):
             if bool(I_mask[ii, jj].item()):
-                S_ij = H_sum[ii, jj] + H_sum[jj, ii]
+                S_ij = H_agg[ii, jj] + H_agg[jj, ii]
                 not_booked = torch.exp(-alpha * S_ij)
 
                 for H_omega, p_w in zip(H_list, scenario_probs):
                     h = H_omega.squeeze(0)
                     usage_omega = h[ii, jj] + h[jj, ii]
-
                     loss = loss + p_w * C_mat[ii, jj] * usage_omega * not_booked
 
     return loss
 
 
-
 # LOSS PRINCIPALE
 
-def two_stage_utsp_loss( T_list, dist_list, I_mask,
+def two_stage_utsp_loss(
+    T_list, dist_list, I_mask,
     p_mat, C_mat, scenario_probs,
-    alpha          = DEFAULT_ALPHA,
-    lambda1        = DEFAULT_LAMBDA1,
-    lambda2        = DEFAULT_LAMBDA2,
-    lambda_e       = DEFAULT_LAMBDA_E,include_entropy=False,
-    lambda_d       = DEFAULT_LAMBDA_D,
-    include_penalty = False, return_components = False,):
+    alpha=DEFAULT_ALPHA,
+    lambda1=DEFAULT_LAMBDA1,
+    lambda2=DEFAULT_LAMBDA2,
+    lambda_e=DEFAULT_LAMBDA_E,
+    include_entropy=False,
+    lambda_d=DEFAULT_LAMBDA_D,
+    include_penalty=False,
+    return_components=False,
+):
     """    
     Parametri
    
@@ -289,7 +291,7 @@ def two_stage_utsp_loss( T_list, dist_list, I_mask,
     L_row   = _loss_row_wise(T_list, scenario_probs)
     L_diag  = _loss_self_loop(H_list, scenario_probs)
     L_dist  = _loss_distance(H_list, dist_list, scenario_probs)
-    L_book  = _loss_booking(H_list, p_mat, I_mask, alpha)
+    L_book  = _loss_booking(H_list, p_mat, I_mask, alpha, H_bar)
     L_asym  = _loss_asymmetry(H_list, scenario_probs)
 
     #   Loss totale  
@@ -303,7 +305,7 @@ def two_stage_utsp_loss( T_list, dist_list, I_mask,
 
     L_pen = torch.tensor(0.0, device=H_list[0].device)
     if include_penalty:
-        L_pen = _loss_penalty(H_list, C_mat, I_mask, scenario_probs, alpha)
+        L_pen = _loss_penalty(H_list, C_mat, I_mask, scenario_probs, alpha, H_bar)
         loss  = loss + L_pen
 
     L_cons = torch.tensor(0.0, device=H_list[0].device)

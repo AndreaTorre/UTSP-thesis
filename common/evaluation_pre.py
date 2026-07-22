@@ -1188,133 +1188,17 @@ def compute_pi_with_booking_costs(results, scenario_ids, I, p):
     return pi_booking_costs
     
     
-
-def _tour_edges(tour):
-    """
-    Converte un tour, rappresentato come sequenza di nodi, negli archi
-    orientati del ciclo.
-
-    Accetta sia:
-      - [0, 1, 2]
-      - [0, 1, 2, 0]
-
-    Nel secondo caso elimina il nodo iniziale ripetuto in coda, evitando
-    la creazione dell'arco spurio (0, 0).
-    """
-    if tour is None:
-        raise ValueError("Impossibile costruire gli archi: il tour è None.")
-
-    if isinstance(tour, np.ndarray):
-        tour = tour.tolist()
-
-    if not isinstance(tour, (list, tuple)):
-        raise TypeError(
-            "Formato del tour non valido: attesa una lista o tupla di nodi, "
-            f"ricevuto {type(tour).__name__}."
-        )
-
-    tour = list(tour)
-
-    if len(tour) >= 2 and tour[0] == tour[-1]:
-        tour = tour[:-1]
-
-    if len(tour) < 2:
-        raise ValueError(
-            f"Tour non valido: servono almeno due nodi, ricevuto {tour!r}."
-        )
-
-    if len(set(tour)) != len(tour):
-        raise ValueError(
-            f"Tour non valido: contiene nodi ripetuti oltre alla chiusura, {tour!r}."
-        )
-
-    return [
-        (tour[k], tour[(k + 1) % len(tour)])
-        for k in range(len(tour))
-    ]
-
-
-def plot_utsp_mean_tours(
-    exp_name, nodes, coords, tours, scenario_ids, I,
-    scenario_probs=None, title_suffix=""
-):
-    scenario_ids = list(scenario_ids)
-    nodes = list(nodes)
-
-    if not scenario_ids:
-        raise ValueError("plot_utsp_mean_tours: scenario_ids è vuoto.")
-
-    missing_tours = [sid for sid in scenario_ids if sid not in tours]
-    if missing_tours:
-        raise KeyError(
-            "plot_utsp_mean_tours: mancano i tour per gli scenari "
-            f"{missing_tours[:10]}"
-            + (" ..." if len(missing_tours) > 10 else "")
-        )
-
+def plot_utsp_mean_tours(exp_name, nodes, coords, tours, scenario_ids, I, scenario_probs=None, title_suffix=""):
     idx = {v: k for k, v in enumerate(nodes)}
     F = np.zeros((len(nodes), len(nodes)), dtype=float)
 
     if scenario_probs is None:
-        probs = {sid: 1.0 / len(scenario_ids) for sid in scenario_ids}
-    else:
-        missing_probs = [sid for sid in scenario_ids if sid not in scenario_probs]
-        if missing_probs:
-            raise KeyError(
-                "plot_utsp_mean_tours: mancano le probabilità per gli scenari "
-                f"{missing_probs[:10]}"
-                + (" ..." if len(missing_probs) > 10 else "")
-            )
-
-        probs = {sid: float(scenario_probs[sid]) for sid in scenario_ids}
-
-        invalid_probs = [
-            sid for sid, prob in probs.items()
-            if not np.isfinite(prob) or prob < 0.0
-        ]
-        if invalid_probs:
-            raise ValueError(
-                "plot_utsp_mean_tours: probabilità non finite o negative per "
-                f"gli scenari {invalid_probs[:10]}."
-            )
-
-        total_prob = sum(probs.values())
-        if total_prob <= 0.0:
-            raise ValueError(
-                "plot_utsp_mean_tours: la somma delle probabilità deve essere positiva."
-            )
-
-        # Normalizzazione sul sottoinsieme effettivamente rappresentato nel grafico.
-        probs = {sid: prob / total_prob for sid, prob in probs.items()}
+        scenario_probs = {sid: 1.0 / len(scenario_ids) for sid in scenario_ids}
 
     for sid in scenario_ids:
         tour = tours[sid]
+        for i, j in _tour_edges(tour):
+            F[idx[i], idx[j]] += scenario_probs[sid]
 
-        try:
-            edges = _tour_edges(tour)
-        except (TypeError, ValueError) as exc:
-            raise type(exc)(
-                f"plot_utsp_mean_tours: tour non valido per lo scenario {sid}: {exc}"
-            ) from exc
-
-        unknown_nodes = sorted({
-            node
-            for edge in edges
-            for node in edge
-            if node not in idx
-        })
-        if unknown_nodes:
-            raise ValueError(
-                f"plot_utsp_mean_tours: lo scenario {sid} contiene nodi "
-                f"non presenti in nodes: {unknown_nodes}."
-            )
-
-        for i, j in edges:
-            F[idx[i], idx[j]] += probs[sid]
-
-    plot_utsp_graph_weights(
-        exp_name, nodes, coords, F,
-        title_suffix=title_suffix, I=I
-    )
+    plot_utsp_graph_weights(exp_name, nodes, coords, F, title_suffix=title_suffix, I=I)
     return F
-

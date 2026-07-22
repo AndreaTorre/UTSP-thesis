@@ -45,7 +45,21 @@ def get_git_commit():
 
 
 # Creo ambiente gurobi senza le credenziali nel codice esplicite
-def load_env():
+def load_env(max_wait_min=60, retry_sec=30):
+    
+    import time as _time
+    deadline = _time.time() + max_wait_min * 60
+    while True:
+        try:
+            return _load_env_once()
+        except gp.GurobiError as e:
+            if "token" in str(e).lower() and _time.time() < deadline:
+                _time.sleep(retry_sec)
+                continue
+            raise
+
+
+def _load_env_once():
     access_id = os.getenv("GRB_WLSACCESSID")
     secret = os.getenv("GRB_WLSSECRET")
     license_id = os.getenv("GRB_LICENSEID")

@@ -107,7 +107,10 @@ UTSP2_TEMP_FIXED = 1.0
 # Normalizzazione distanze interna alla GNN/loss
 UTSP2_DIST_SCALE_MODE = "mean_positive"
 
-UTSP2_INCLUDE_PENALTY = True
+UTSP2_AGGREGATION = os.getenv("TESI_UTSP_AGGREGATION", "sum").strip().lower()
+if UTSP2_AGGREGATION not in {"sum", "mean"}:
+    raise ValueError(f"TESI_UTSP_AGGREGATION non valido: {UTSP2_AGGREGATION}")
+UTSP2_INCLUDE_PENALTY = os.getenv("TESI_UTSP_INCLUDE_PENALTY", "1").strip() == "1"
 UTSP2_INCLUDE_ENTROPY = False
 
 # ── Modalità ed esecuzione UTSP ──────────────────────────────────
