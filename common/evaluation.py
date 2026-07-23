@@ -529,7 +529,7 @@ def print_and_save_summary(
     output_text = "\n".join(lines)
     print("\n" + output_text)
 
-    fname = out_path(f"risultati_{exp_name}.txt")
+    fname = out_path(f"esperimento_B_{exp_name}.txt", "report")
     with open(fname, "w", encoding="utf-8") as f:
         f.write(output_text + "\n")
 
@@ -567,7 +567,7 @@ def _aggregate_test_instances(exp_name, istanza_metrics):
     output_text = "\n".join(lines)
     print("\n" + output_text)
 
-    fname = out_path(f"risultati_{exp_name}_test_aggregato.txt")
+    fname = out_path(f"validazione_{exp_name}_aggregato.txt", "report")
     with open(fname, "w", encoding="utf-8") as f:
         f.write(output_text + "\n")
     print(f"\n  → Diagnostica aggregata salvata in: {fname}")
@@ -707,8 +707,10 @@ def validate_policies(
             "=" * 60,
         ]
         val_lines += random_impact_lines
-        fname = out_path(f"risultati_{exp_name}.txt")
-        with open(fname, "a", encoding="utf-8") as f:
+        # NOTA: file separato e mode "w". Prima accodava al report di
+        # Esperimento B, e su riesecuzione accumulava.
+        fname = out_path(f"validazione_{exp_name}.txt", "report")
+        with open(fname, "w", encoding="utf-8") as f:
             f.write("\n" + "\n".join(val_lines) + "\n")
 
     return {
@@ -898,7 +900,7 @@ def plot_scenario_comparison_utsp( exp_name, scenario_id, nodes,
     plt.tight_layout()
 
     if save:
-        fname = out_path(f"grafici/{exp_name}_scenario_{scenario_id}_confronto.png")
+        fname = out_path(f"{exp_name}_scenario_{scenario_id}_confronto.png", "grafici")
         plt.savefig(fname, dpi=150, bbox_inches="tight")
         plt.close()
         print(f"  Salvato grafico 4 pannelli: {fname}")
@@ -968,7 +970,7 @@ def plot_utsp_heatmap(exp_name, nodes, H, title_suffix="", save=True):
 
     plt.tight_layout()
     if save:
-        fname = out_path(f"grafici/{exp_name}_heatmap.png")
+        fname = out_path(f"{exp_name}_heatmap.png", "grafici")
         plt.savefig(fname, dpi=150, bbox_inches="tight")
         plt.close()
         print(f"  Salvato heatmap: {fname}")
@@ -1029,7 +1031,7 @@ def plot_utsp_graph_weights(exp_name, nodes, coords, H, threshold=0.01, title_su
     plt.tight_layout()
 
     if save:
-        fname = out_path(f"grafici/{exp_name}_graph_weights.png")
+        fname = out_path(f"{exp_name}_graph_weights.png", "grafici")
         plt.savefig(fname, dpi=150, bbox_inches="tight")
         plt.close()
         print(f"  Salvato grafo pesato: {fname}")
@@ -1126,12 +1128,12 @@ def plot_cost_distributions(eev_costs, stoch_costs, utsp_costs,
     plt.tight_layout()
 
     if save:
-        fname = out_path(f"grafici/{exp_name}_cost_distributions_{split_label}.png")
+        fname = out_path(f"{exp_name}_cost_distributions_{split_label}.png", "grafici")
         plt.savefig(fname, dpi=150, bbox_inches="tight")
         plt.close()
         print(f"  Salvato grafico distribuzioni costi ({split_label}): {fname}")
 
-        stats_fname = out_path(f"grafici/{exp_name}_cost_distributions_{split_label}_stats.txt")
+        stats_fname = out_path(f"{exp_name}_cost_distributions_{split_label}_stats.txt", "report")
         with open(stats_fname, "w") as f:
             f.write(f"Statistiche descrittive — {exp_name} ({split_label})\n")
             f.write("=" * 60 + "\n\n")

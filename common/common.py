@@ -28,9 +28,11 @@ def ensure_dir(path):
     return path
 
 
-def out_path(filename):
-    ensure_dir(OUTPUT_DIR)
-    return os.path.join(OUTPUT_DIR, filename)
+def out_path(filename, subdir=None):
+    
+    base = OUTPUT_DIR if subdir is None else os.path.join(OUTPUT_DIR, subdir)
+    ensure_dir(base)
+    return os.path.join(base, filename)
 
 
 def get_git_commit():

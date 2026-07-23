@@ -13,6 +13,7 @@ DEFAULT_LAMBDA2   =  10.0   # no-self-loop
 DEFAULT_LAMBDA_E  =  1   # consistency           
 DEFAULT_LAMBDA_D  =  1   # asymmetry             
 DEFAULT_ALPHA     =  5.0
+DEFAULT_LAMBDA_B_DIV = 1.0   # lambda_B = |Omega| / divisore
 
 
  
@@ -183,7 +184,9 @@ def _loss_booking(H_list, p_mat, I_mask, alpha, H_bar):
                 activation = 1.0 - torch.exp(-alpha * S_ij)
                 cost = cost + p_mat[ii, jj] * activation
 
-    return len(H_list) * cost    #moltiplicato per la cardinalità di Omega (#numero di scenari)
+    # NOTA: il fattore |Omega| è uscito da qui: ora è lambda_b, calcolato in
+    # two_stage_utsp_loss come len(H_list)/lambda_b_div e sintonizzabile.
+    return cost
 
 # penalizzo la variabilità/differenza di una data heatmap in base alla heatmap media
 # cerco un accordo tra i valori degli scenari, in particolare archi in I
@@ -254,6 +257,7 @@ def two_stage_utsp_loss(
     lambda_e=DEFAULT_LAMBDA_E,
     include_entropy=False,
     lambda_d=DEFAULT_LAMBDA_D,
+    lambda_b_div=DEFAULT_LAMBDA_B_DIV,
     include_penalty=False,
     return_components=False,
 ):
@@ -291,12 +295,19 @@ def two_stage_utsp_loss(
     L_book  = _loss_booking(H_list, p_mat, I_mask, alpha, H_bar)
     L_asym  = _loss_asymmetry(H_list, scenario_probs)
 
+    # Peso del booking: la cardinalità degli scenari sta al numeratore perché
+    # il costo di prenotazione è di primo stadio (pagato una volta) mentre gli
+    # altri termini sono attese pesate con p_omega. Il divisore è il parametro
+    # da tarare; 1.0 riproduce esattamente il comportamento precedente.
+    lambda_b = len(H_list) / float(lambda_b_div)
+    
+    
     #   Loss totale  
     loss = (
         lambda1   * L_row
         + lambda2 * L_diag
         + L_dist
-        + L_book
+        + lambda_b * L_book
         + lambda_d * L_asym
     )
 
@@ -317,6 +328,7 @@ def two_stage_utsp_loss(
             "self_loop":   float(L_diag.detach().cpu().item()),
             "distance":    float(L_dist.detach().cpu().item()),
             "booking":     float(L_book.detach().cpu().item()),
+            "lambda_b":    float(lambda_b),
             "consistency": float(L_cons.detach().cpu().item()),
             "asymmetry":   float(L_asym.detach().cpu().item()),
             "penalty":     float(L_pen.detach().cpu().item()),
@@ -329,26 +341,28 @@ def two_stage_utsp_loss(
   
 
 def decode_booking_policy(H_list, I, nodes, I_mask, scenario_probs, alpha=DEFAULT_ALPHA, threshold=0.8):
+    """
+    Politica di prenotazione di primo stadio a partire dalle heatmap.
+
+    NOTA: usa esattamente la stessa attivazione di _loss_booking, cioè
+    1 - exp(-alpha * (H_bar[i,j] + H_bar[j,i])) su H_bar = sum_omega p_omega H^omega.
+    Prima qui si usava la SOMMA non pesata sugli scenari e si prendeva il max
+    fra le due direzioni: entrambe le cose rendevano lo score in decodifica
+    diverso da quello ottimizzato in training, e la prima lo faceva dipendere
+    da |Omega| invece che dalla rete.
+    """
     idx = {v: k for k, v in enumerate(nodes)}
 
     with torch.no_grad():
-        H_stack = torch.stack([H.squeeze(0) for H in H_list], dim=0)
-        H_sum   = H_stack.sum(dim=0) 
-        b_tilde = compute_booking_activation(H_sum, I_mask, alpha)
+        H_agg = compute_H_bar(H_list, scenario_probs).squeeze(0)   # (n, n)
 
     x_reserved = []
     x_scores   = {}
-    print(f"DEBUG decode_booking_policy: len(H_list)={len(H_list)}, H_list[0].shape={H_list[0].shape}")
-    for edge in I:
-        #prima 
-        # i, j   = canon_edge(*edge)
-        #dopo
-        i, j   = edge 
+    for i, j in I:
         ii, jj = idx[i], idx[j]
-        score = max(float(b_tilde[0, ii, jj].item()),
-                    float(b_tilde[0, jj, ii].item()))
-        x_scores[(i, j)] = score
-        if score >= threshold:
+        S_ij = float(H_agg[ii, jj].item() + H_agg[jj, ii].item())   # ≈ frequenza d'uso stimata
+        x_scores[(i, j)] = S_ij
+        if S_ij > get_edge_value(p, i, j) / get_edge_value(C, i, j):
             x_reserved.append((i, j))
 
     return x_reserved, x_scores
@@ -364,6 +378,7 @@ def format_loss_components(components, epoch=None):
         f"{prefix} | total={components['total']:.4f} "
         f"| dist={components['distance']:.4f} "
         f"| book={components['booking']:.4f} "
+        f"| book={components['booking']:.4f}x{components.get('lambda_b', 1.0):.1f} "
         f"| cons={components['consistency']:.4f} "
         f"| asym={components['asymmetry']:.4f} "
         f"| pen={components['penalty']:.4f} "

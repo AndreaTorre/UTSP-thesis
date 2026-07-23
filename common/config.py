@@ -70,8 +70,20 @@ ERA5_NC_PATH = ERA5_NC_PATH_TRAIN
 ROOT_DIR = str(ROOT_DIR)
 EXPERIMENT_DIR = str(EXPERIMENT_DIR)
 
-for _subdir in ("output", "grafici", "checkpoint", "pkl"):
-    os.makedirs(os.path.join(OUTPUT_DIR, _subdir), exist_ok=True)
+# Cartelle CONDIVISE da tutte le run di questa taglia: log SLURM, ripresa di
+# Esperimento B, cache costose (res_B, scenari, pool). Non vanno replicate per
+# combinazione della grid.
+for _subdir in ("output", "checkpoint", "pkl"):
+    os.makedirs(os.path.join(BASE_OUTPUT_DIR, _subdir), exist_ok=True)
+
+# Cartelle PER-RUN: seguono OUTPUT_DIR, quindi anche TESI_OUTPUT_OVERRIDE.
+RUN_SUBDIRS = ("report", "grafici", "modello")
+
+def _prepare_run_dirs(_path):
+    for _s in RUN_SUBDIRS:
+        os.makedirs(os.path.join(_path, _s), exist_ok=True)
+
+_prepare_run_dirs(OUTPUT_DIR)
 
 # ============================================================
 # Backend specifico dell'esperimento (solo iperparametri)
@@ -163,9 +175,45 @@ TEST_SKIP_PI = os.getenv("TESI_TEST_SKIP_PI", "0").strip() == "1"
 _test_subdir = os.getenv("TESI_TEST_OUTPUT_SUBDIR")
 if _test_subdir is not None:
     OUTPUT_DIR = os.path.join(OUTPUT_DIR, _test_subdir)
-    for _subdir in ("output", "grafici", "checkpoint", "pkl"):
-        os.makedirs(os.path.join(OUTPUT_DIR, _subdir), exist_ok=True)
+    _prepare_run_dirs(OUTPUT_DIR)
 
 # Alcuni script (grid_search.py, run_single.py) lanciano sotto-processi
 # che devono ereditare l'OUTPUT_DIR risolto qui, batch sweep incluso.
+# ============================================================
+# Override da environment (grid search)
+# ============================================================
+# TESI_P_<NOME>=<valore> sovrascrive una costante già definita sopra,
+# convertendola nel tipo dell'originale. Un nome inesistente è un ERRORE:
+# un refuso nella griglia non deve passare silenziosamente e produrre run
+# "riusciti" ma girati con i valori di default.
+
+_PREFIX = "TESI_P_"
+for _k in sorted(k for k in os.environ if k.startswith(_PREFIX)):
+    _name = _k[len(_PREFIX):]
+    if _name not in globals():
+        raise ValueError(f"{_k}: il parametro '{_name}' non esiste in config.")
+    _raw = os.environ[_k].strip()
+    _cur = globals()[_name]
+    if isinstance(_cur, bool):
+        globals()[_name] = _raw.lower() in {"1", "true", "yes"}
+    elif isinstance(_cur, int):
+        globals()[_name] = int(float(_raw))
+    elif isinstance(_cur, float):
+        globals()[_name] = float(_raw)
+    else:
+        globals()[_name] = _raw
+
+# TESI_OUTPUT_OVERRIDE sostituisce OUTPUT_DIR (usata dalla grid search per
+# scrivere in grid_search/<EXP>/NODI_<n>/BATCH_<b>/combo_XXXX).
+# NOTA: TEST_SCENARIO_CACHE_DIR resta ancorata a RISULTATI_N/pkl, calcolata
+# molto più sopra: res_B e i PI sono condivisi da tutte le combinazioni e non
+# vanno mai ricalcolati per combo (STO arriva a 12h su 40 nodi).
+_override = os.getenv("TESI_OUTPUT_OVERRIDE")
+if _override:
+    OUTPUT_DIR = TRAIN_OUTPUT_DIR = os.path.abspath(_override)
+    for _subdir in ("output", "grafici", "checkpoint", "pkl"):
+        os.makedirs(os.path.join(OUTPUT_DIR, _subdir), exist_ok=True)
+
+# Alcuni script lanciano sotto-processi che devono ereditare l'OUTPUT_DIR
+# risolto qui, batch sweep e override inclusi.
 os.environ["TESI_OUTPUT_DIR"] = OUTPUT_DIR

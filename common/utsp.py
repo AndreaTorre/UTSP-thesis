@@ -16,7 +16,7 @@ from config import (
     TRAIN_SCENARIO_IDS_UTSP, DROP_LAST_TRAIN_BATCH, UTSP_TRAINING_SEED,
     UTSP2_HIDDEN, UTSP2_NLAYERS, UTSP2_EPOCHS, UTSP2_LR, UTSP2_STEP_LR, UTSP2_LOG_FREQ,
     UTSP2_LAMBDA1, UTSP2_LAMBDA2, UTSP2_LAMBDA_D, UTSP2_LAMBDA_E,
-    UTSP2_TEMP_MODE, UTSP2_TEMP_SCALE, UTSP2_TEMP_FIXED,
+    UTSP2_TEMP_MODE, UTSP2_TEMP_SCALE, UTSP2_TEMP_FIXED,UTSP2_LAMBDA_B_DIV,
     UTSP2_DIST_SCALE_MODE, UTSP2_INCLUDE_PENALTY, UTSP2_INCLUDE_ENTROPY, UTSP2_LS_ALPHA,
 )
 from tsp_utils import get_edge_value
@@ -282,7 +282,7 @@ def _utsp_train_dir(exp_name):
     # NOTA: TRAIN_OUTPUT_DIR, non OUTPUT_DIR — con TESI_TEST_OUTPUT_SUBDIR
     # l'output è deviato in test/IS_*_DIM_*, ma i checkpoint vivono sempre
     # in <batch_dir>/train/<nome>. I due coincidono fuori dal test sweep.
-    train_dir = os.path.join(TRAIN_OUTPUT_DIR, "train", name)
+    train_dir = os.path.join(TRAIN_OUTPUT_DIR, "modello", name)
     os.makedirs(train_dir, exist_ok=True)
     return train_dir
 
@@ -500,7 +500,7 @@ def _train_utsp_2stage(
             loss, comps = two_stage_utsp_loss(
                 T_list, dist_list, I_mask, p_mat, C_mat, bs["probs_t"],
                 alpha=UTSP2_LS_ALPHA, lambda1=UTSP2_LAMBDA1, lambda2=UTSP2_LAMBDA2,
-                lambda_e=UTSP2_LAMBDA_E, lambda_d=UTSP2_LAMBDA_D,
+                lambda_e=UTSP2_LAMBDA_E,lambda_b_div=UTSP2_LAMBDA_B_DIV, lambda_d=UTSP2_LAMBDA_D,
                 include_penalty=UTSP2_INCLUDE_PENALTY,
                 include_entropy=UTSP2_INCLUDE_ENTROPY,
                 return_components=True,

@@ -21,11 +21,12 @@ import math
 import random
 import pickle
 import hashlib
+from common import out_path
 import numpy as np
 import torch
 
 from config import (
-    OUTPUT_DIR, N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC, UTSP_BATCH_SIZE,
+    N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC, UTSP_BATCH_SIZE,
     TEST_SCENARIO_IDS_UTSP, TEST_SCENARIO_SEED,
     TEST_SCENARIO_CACHE_DIR, TEST_SKIP_PI, PI_TIME_LIMIT, PI_MIP_GAP,
     UTSP2_EPOCHS, UTSP2_LS_ALPHA,
@@ -604,6 +605,139 @@ def _heatmap_bar_from_H_list(H_list, scenario_ids, scenario_probs):
 
     return H_bar
 
+def compare_bookings_heatmap_vs_tours(
+    H_list, tours, tc_by_sid, scenario_ids, scenario_probs,
+    nodes, I, p, C, x_ls, exp_name="espB_UTSP_LS", label="test",
+):
+    """
+    Controllo diagnostico: la heatmap non supervisionata ricostruisce la
+    frequenza d'uso degli archi in I?
+
+    Confronta due stime della STESSA grandezza, con la STESSA regola:
+
+        f_H  = H_bar[i,j] + H_bar[j,i]     stima della rete
+        f_LS = #{scenari in cui {i,j} e' nel tour} / #scenari    misura sui tour
+        prenota se  f > p_ij / C_ij        soglia analitica (critical ratio)
+
+    Nessun alpha, nessuna soglia arbitraria: se il decisore avesse parametri
+    liberi si potrebbe sempre tarare fino a farlo concordare, e il confronto
+    non direbbe piu' niente.
+
+    Calcola anche quanto sarebbe costata la politica della heatmap, riusando i
+    tour gia' trovati.
+    NOTA: e' un confronto a instradamento FISSO. I tour sono stati ottimizzati
+    conoscendo x_ls, non x_H, quindi il delta di costo misura solo l'effetto
+    diretto su prenotazioni e multe, non la rirotta che la local search avrebbe
+    fatto sapendo di aver prenotato altri archi. Per il controfattuale esatto
+    serve rilanciare la LS post-booking con x_ls=x_H.
+
+    Ritorna un dict con il dettaglio per arco e gli aggregati.
+    """
+    from tsp_utils import canon_edge as _ce
+
+    I_set = sorted({_ce(i, j) for (i, j) in I})
+    n_scen = len(scenario_ids)
+    if not I_set or n_scen == 0:
+        return {}
+
+    H_bar = _heatmap_bar_from_H_list(H_list, scenario_ids, scenario_probs)
+    idx = {v: k for k, v in enumerate(nodes)}
+
+    # f_LS con lo stesso conteggio non pesato di _compute_bookings_from_tours,
+    # altrimenti una differenza di decisione potrebbe venire dalla pesatura e
+    # non dalla heatmap.
+    usage = {e: 0 for e in I_set}
+    for sid in scenario_ids:
+        for (a, b) in _tour_edges(tours[sid]):
+            e = _ce(a, b)
+            if e in usage:
+                usage[e] += 1
+
+    rows, x_H = [], []
+    for (i, j) in I_set:
+        ii, jj = idx[i], idx[j]
+        f_H = float(H_bar[ii, jj] + H_bar[jj, ii])
+        f_LS = usage[(i, j)] / n_scen
+        C_val = get_edge_value(C, i, j)
+        soglia = get_edge_value(p, i, j) / C_val if C_val > 0 else float("inf")
+        book_H, book_LS = f_H > soglia, f_LS > soglia
+        if book_H:
+            x_H.append((i, j))
+        rows.append({"edge": (i, j), "f_H": f_H, "f_LS": f_LS, "soglia": soglia,
+                     "book_H": book_H, "book_LS": book_LS, "accordo": book_H == book_LS})
+
+    # Costo della politica heatmap sugli stessi tour (instradamento fisso).
+    x_H_set = set(x_H)
+    reserv_H = sum(get_edge_value(p, i, j) for (i, j) in x_H)
+    costs_H = {}
+    for sid in scenario_ids:
+        pc = sum(get_edge_value(C, a, b) for (a, b) in _tour_edges(tours[sid])
+                 if _ce(a, b) in set(I_set) and _ce(a, b) not in x_H_set)
+        costs_H[sid] = reserv_H + tc_by_sid[sid] + pc
+    cost_H = _scenario_mean(costs_H, scenario_ids, scenario_probs)
+
+    x_ls_set = {_ce(i, j) for (i, j) in x_ls}
+    reserv_LS = sum(get_edge_value(p, i, j) for (i, j) in x_ls)
+    costs_LS = {}
+    for sid in scenario_ids:
+        pc = sum(get_edge_value(C, a, b) for (a, b) in _tour_edges(tours[sid])
+                 if _ce(a, b) in set(I_set) and _ce(a, b) not in x_ls_set)
+        costs_LS[sid] = reserv_LS + tc_by_sid[sid] + pc
+    cost_LS = _scenario_mean(costs_LS, scenario_ids, scenario_probs)
+
+    fh = np.array([r["f_H"] for r in rows])
+    fl = np.array([r["f_LS"] for r in rows])
+    corr = float(np.corrcoef(fh, fl)[0, 1]) if len(rows) > 1 and fh.std() > 0 and fl.std() > 0 else float("nan")
+    n_acc = sum(r["accordo"] for r in rows)
+
+    out = {
+        "per_arco": rows,
+        "x_H": x_H, "x_LS": sorted(x_ls_set),
+        "n_archi": len(rows), "n_accordi": n_acc,
+        "accordo_frac": n_acc / len(rows),
+        "corr_f": corr,
+        "mae_f": float(np.abs(fh - fl).mean()),
+        "bias_f": float((fh - fl).mean()),
+        "cost_H": cost_H, "cost_LS": cost_LS, "delta_cost": cost_H - cost_LS,
+    }
+
+    lines = [
+        "", "=" * 78,
+        f"CONTROLLO PRENOTAZIONI — heatmap vs tour  [{label}, {n_scen} scenari]",
+        "=" * 78,
+        "  f_H  = stima della rete   (H_bar[i,j] + H_bar[j,i])",
+        "  f_LS = misura sui tour    (frequenza d'uso)",
+        "  regola comune: prenota se f > p/C",
+        "",
+        f"  {'arco':>10} | {'f_H':>7} | {'f_LS':>7} | {'p/C':>7} | {'H':>4} | {'LS':>4} | esito",
+        f"  {'-'*10}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}-+-{'-'*4}-+-{'-'*4}-+-------",
+    ]
+    for r in rows:
+        i, j = r["edge"]
+        lines.append(
+            f"  {'{'+str(i)+','+str(j)+'}':>10} | {r['f_H']:>7.3f} | {r['f_LS']:>7.3f} | "
+            f"{r['soglia']:>7.3f} | {'SI' if r['book_H'] else 'no':>4} | "
+            f"{'SI' if r['book_LS'] else 'no':>4} | {'ok' if r['accordo'] else 'DIVERGE'}"
+        )
+    lines += [
+        "",
+        f"  Accordo            : {n_acc}/{len(rows)}  ({100*n_acc/len(rows):.1f}%)",
+        f"  Correlazione f     : {corr:+.4f}",
+        f"  MAE / bias su f    : {out['mae_f']:.4f} / {out['bias_f']:+.4f}",
+        "",
+        f"  Costo politica LS  : {cost_LS:.4f}",
+        f"  Costo politica H   : {cost_H:.4f}   ({out['delta_cost']:+.4f})",
+        "  NOTA: instradamento fisso, tour ottimizzati conoscendo la politica LS.",
+        "=" * 78,
+    ]
+    text = "\n".join(lines)
+    print(text)
+    fname = out_path(f"controllo_prenotazioni_{exp_name}_{label}.txt", "report")
+    with open(fname, "w", encoding="utf-8") as f:
+        f.write(text + "\n")
+    print(f"  → Salvato: {fname}")
+
+    return out
 
 def _evaluate_fixed_tour_on_scenarios(tour, results, scenario_ids):
     costs = {}
@@ -633,8 +767,8 @@ def _aggregate_test_instances(exp_name, istanza_metrics):
     NOTA: prima versione minimale, solo per sbloccare _run_local_search_branch.
     """
     import numpy as np
-    keys = ["UTSP_LS_test", "PI_test", "PI_pren_test", "STO_test", "EEV_test",
-            "gap_ls_sto", "gap_ls_eev", "gap_ls_pi"]
+    keys = ["UTSP_LS_test", "WS_test", "PI_test", "PI_pren_test", "STO_test", "EEV_test",
+            "gap_ls_sto", "gap_ls_eev", "gap_ls_pi", "gap_ls_ws",]
     agg = {"n_istanze": len(istanza_metrics)}
     for k in keys:
         vals = [m[k] for m in istanza_metrics if m.get(k) is not None and np.isfinite(m[k])]
@@ -953,10 +1087,10 @@ def _append_utsp_train_cost_diagnostics(
 
     lines.append("=" * 80)
 
-    grafici_dir = os.path.join(OUTPUT_DIR, "grafici")
-    os.makedirs(grafici_dir, exist_ok=True)
-    stats_file = os.path.join(grafici_dir, f"{exp_name}_cost_distributions_{split_label}_stats.txt")
-    with open(stats_file, "a", encoding="utf-8") as f:
+    # NOTA: era mode="a" senza guardia: ogni riesecuzione accodava alla
+    # precedente e il file finiva per contenere due run concatenate.
+    stats_file = out_path(f"{exp_name}_cost_distributions_{split_label}_stats.txt", "report")
+    with open(stats_file, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
     print(f"  → Diagnostica UTSP train completa aggiunta a: {stats_file}")
@@ -1111,6 +1245,26 @@ def _load_pool_costs():
         return {}
 
 
+def _pool_costs_by_model(scenario_ids, model):
+    """Costi di un modello del pool (PI/STO/EEV/WS) per scenario_id.
+
+    Ritorna {} se il pool non c'è o non copre TUTTI gli scenari richiesti:
+    una media su un sottoinsieme non sarebbe confrontabile con le altre
+    metriche, quindi meglio nessun valore che un valore sbagliato.
+    """
+    pool = _load_pool_costs()
+    if not pool:
+        return {}
+    out = {}
+    for sid in scenario_ids:
+        rec = (pool.get(sid) or {}).get(model) or {}
+        c = rec.get("cost")
+        if c is None:
+            return {}
+        out[sid] = float(c)
+    return out
+
+
 def _validate_policies_cached(
     nodes, E, I, p, C, root, env,
     x_sto, x_ev, results_by_sid, scenario_ids,
@@ -1187,14 +1341,44 @@ def _validate_policies_cached(
             }
         _save_sto_eev_cache(state_key, cache)
 
+    
+    # WS = wait-and-see: x libera per scenario, primo e secondo stadio ottimi
+    # insieme. È il bound corretto per il due-stadi (WS <= STO <= EEV), mentre
+    # il PI ignora del tutto I, p e C.
+    # NOTA: non dipende da x_sto/x_ev, ma vive nella stessa cache (che invece è
+    # indicizzata anche su quelle). Le entry vecchie non hanno "ws_cost": si
+    # completano con un secondo passaggio, senza invalidare la cache esistente.
+    ws_missing = [sid for sid in scenario_ids if cache.get(sid, {}).get("ws_cost") is None]
+    if ws_missing:
+        pool = _load_pool_costs()
+        for sid in list(ws_missing):
+            c_ws = ((pool.get(sid) or {}).get("WS") or {}).get("cost")
+            if c_ws is not None:
+                cache.setdefault(sid, {})["ws_cost"] = float(c_ws)
+                ws_missing.remove(sid)
+    if ws_missing:
+        print(f"  WS: {len(ws_missing)} scenari da risolvere con Gurobi")
+        for sid in ws_missing:
+            r_ws = solve_reservation_tsp(
+                nodes, E, I, results_by_sid[sid]["scenario_dist"], root, p, C, env,
+                fixed_reservations=None, output_flag=0, model_name=f"val_ws_{sid}",
+            )
+            cache.setdefault(sid, {})["ws_cost"] = r_ws["total_cost"]
+        _save_sto_eev_cache(state_key, cache)
+    
     sto_costs = {sid: cache[sid]["sto_cost"] for sid in scenario_ids}
     eev_costs = {sid: cache[sid]["eev_cost"] for sid in scenario_ids}
     n = len(scenario_ids)
     STO_val = sum(sto_costs.values()) / n
     EEV_val = sum(eev_costs.values()) / n
-    print(f"  STO_val = {STO_val:.4f}  EEV_val = {EEV_val:.4f}  (media su {n} scenari, cache STO/EEV)")
+    ws_vals = [cache[sid].get("ws_cost") for sid in scenario_ids]
+    WS_val = sum(ws_vals) / n if all(v is not None for v in ws_vals) else float("nan")
+    print(f"  WS_val = {WS_val:.4f}  STO_val = {STO_val:.4f}  EEV_val = {EEV_val:.4f}  "
+          f"(media su {n} scenari, cache WS/STO/EEV)")
 
-    return {"STO_val": STO_val, "EEV_val": EEV_val, "sto_costs": sto_costs, "eev_costs": eev_costs}
+    return {"WS_val": WS_val, "STO_val": STO_val, "EEV_val": EEV_val,
+            "sto_costs": sto_costs, "eev_costs": eev_costs,
+            "ws_costs": {sid: cache[sid].get("ws_cost") for sid in scenario_ids}}
 
 
 def generate_test_scenario_blocks(
@@ -1414,9 +1598,8 @@ def _write_utsp_pipeline_stats_file(
 
     lines.append("=" * 90)
 
-    grafici_dir = os.path.join(OUTPUT_DIR, "grafici")
-    os.makedirs(grafici_dir, exist_ok=True)
-    stats_file = os.path.join(grafici_dir, f"{exp_name}_cost_distributions_train_stats.txt")
+     
+    stats_file = out_path(f"{exp_name}_cost_distributions_train_stats.txt", "report")
     with open(stats_file, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     print(f"  → Diagnostica pipeline UTSP scritta in: {stats_file}")
@@ -1432,6 +1615,7 @@ def _write_utsp_test_only_stats_file(
     gap_ls_sto, gap_ls_eev, gap_ls_pi,
     history, temperature, dist_scale,
     idx=0, n_istanze=1, base_exp_name=None,
+    WS_test=float("nan"), gap_ls_ws=float("nan"),
 ):
     def fmt(x):
         if x is None:
@@ -1462,12 +1646,12 @@ def _write_utsp_test_only_stats_file(
         f"dist_scale         = {fmt(dist_scale)}",
         "",
         "RISULTATI TEST",
-        f"  PI test          = {fmt(PI_test)}",
+        f"  WS test          = {fmt(WS_test)}",
         f"  PI+pren test     = {fmt(PI_pren_test)}",
         f"  UTSP test        = {fmt(UTSP_LS_test)}",
         f"  STO test         = {fmt(STO_test)}",
         f"  EEV test         = {fmt(EEV_test)}",
-        f"  Gap UTSP vs STO  = {fmt(gap_ls_sto)}%",
+        f"  Gap UTSP vs WS   = {fmt(gap_ls_ws)}%",
         f"  Gap UTSP vs EEV  = {fmt(gap_ls_eev)}%",
         f"  Gap UTSP vs PI   = {fmt(gap_ls_pi)}%",
         "",
@@ -1490,10 +1674,9 @@ def _write_utsp_test_only_stats_file(
 
     # UN SOLO file per cella (tutte le istanze accodate), sotto grafici/.
     # base_exp_name è il nome della cella SENZA l'indice istanza.
-    grafici_dir = os.path.join(OUTPUT_DIR, "grafici")
-    os.makedirs(grafici_dir, exist_ok=True)
+     
     base = base_exp_name or exp_name
-    stats_file = os.path.join(grafici_dir, f"{base}_test_all_instances.txt")
+    stats_file = out_path(f"{base}_test_all_instances.txt", "report")
     mode = "w" if idx == 0 else "a"      # prima istanza sovrascrive, poi accoda
     with open(stats_file, mode, encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -1571,11 +1754,30 @@ def _run_utsp_test_only_branch(
             device=device, x_ls=x_test, label=f"{label_suffix}_post_booking",
             apply_penalties=True,
         )
+        
+        
+
+        booking_check = compare_bookings_heatmap_vs_tours(
+            H_test, test_post_tours, test_post_tc,
+            scenario_ids_test, scenario_probs_test,
+            nodes, I, p, C, x_test,
+            exp_name=exp_name, label=f"{label_suffix}_istanza{idx}",
+        )
+
+        pi_test_d = _compute_exact_free_costs_from_results(results_test, scenario_ids_test)
 
         pi_test_d = _compute_exact_free_costs_from_results(results_test, scenario_ids_test)
         PI_test = _scenario_mean(pi_test_d, scenario_ids_test, scenario_probs_test)
         pi_pren_test_d = _compute_pi_with_booking_costs_local(results_test, scenario_ids_test, I, p)
         PI_pren_test = _scenario_mean(pi_pren_test_d, scenario_ids_test, scenario_probs_test)
+         
+
+        # Se il PI non è stato calcolato (TESI_TEST_SKIP_PI=1) ma sta nel pool,
+        # lo si recupera da lì invece di rinunciarci.
+        if not np.isfinite(PI_test):
+            pi_pool_d = _pool_costs_by_model(scenario_ids_test, "PI")
+            if pi_pool_d:
+                PI_test = _scenario_mean(pi_pool_d, scenario_ids_test, scenario_probs_test)
 
         # NOTA: STO/EEV non sono cacheabili tra istanze o tra DIM diversi,
         # a differenza del PI: dipendono dal blocco intero di scenari
@@ -1595,6 +1797,7 @@ def _run_utsp_test_only_branch(
                 frequent_arcs=frequent_arcs,
                 scenario_kwargs=scenario_kwargs,
             )
+            WS_test = test_bench.get("WS_val", float("nan"))
             STO_test = test_bench.get("STO_val", float("nan"))
             EEV_test = test_bench.get("EEV_val", float("nan"))
 
@@ -1606,17 +1809,20 @@ def _run_utsp_test_only_branch(
         except Exception as exc:
             print(f"  Attenzione: _validate_policies_cached istanza {idx} non riuscita: {exc}")
             test_bench = {}
+            WS_test = float("nan")
             STO_test = float("nan")
             EEV_test = float("nan")
 
         gap_ls_sto = (UTSP_LS_test - STO_test) / abs(STO_test) * 100 if STO_test and np.isfinite(STO_test) else float("nan")
         gap_ls_eev = (UTSP_LS_test - EEV_test) / abs(EEV_test) * 100 if EEV_test and np.isfinite(EEV_test) else float("nan")
         gap_ls_pi = (UTSP_LS_test - PI_test) / abs(PI_test) * 100 if PI_test and np.isfinite(PI_test) else float("nan")
+        gap_ls_ws = (UTSP_LS_test - WS_test) / abs(WS_test) * 100 if WS_test and np.isfinite(WS_test) else float("nan")
 
         print(f"\n  [Istanza {idx}] RIEPILOGO ({len(scenario_ids_test)} scenari)")
-        print(f"    PI={PI_test:.4f} PI+pren={PI_pren_test:.4f} "
+        print(f"    WS={WS_test:.4f} PI={PI_test:.4f} PI+pren={PI_pren_test:.4f} "
               f"UTSP={UTSP_LS_test:.4f} STO={STO_test:.4f} EEV={EEV_test:.4f}")
-        print(f"    Gap vs STO={gap_ls_sto:+.2f}% vs EEV={gap_ls_eev:+.2f}% vs PI={gap_ls_pi:+.2f}%")
+        print(f"    Gap vs WS={gap_ls_ws:+.2f}% vs STO={gap_ls_sto:+.2f}% "
+              f"vs EEV={gap_ls_eev:+.2f}% vs PI={gap_ls_pi:+.2f}%")
 
         _write_utsp_test_only_stats_file(
             exp_name=exp_name_i,
@@ -1638,6 +1844,7 @@ def _run_utsp_test_only_branch(
             gap_ls_sto=gap_ls_sto,
             gap_ls_eev=gap_ls_eev,
             gap_ls_pi=gap_ls_pi,
+            WS_test=WS_test, gap_ls_ws=gap_ls_ws,
             history=history or {"loss": []},
             temperature=temperature,
             dist_scale=dist_scale,
@@ -1648,13 +1855,17 @@ def _run_utsp_test_only_branch(
 
         istanza_metrics.append({
             "idx": idx, "n_scenari": len(scenario_ids_test),
-            "UTSP_LS_test": UTSP_LS_test, "PI_test": PI_test, "PI_pren_test": PI_pren_test,
+            "UTSP_LS_test": UTSP_LS_test, "WS_test": WS_test,
+            "PI_test": PI_test, "PI_pren_test": PI_pren_test,
             "STO_test": STO_test, "EEV_test": EEV_test,
-            "gap_ls_sto": gap_ls_sto, "gap_ls_eev": gap_ls_eev, "gap_ls_pi": gap_ls_pi,
+            "gap_ls_sto": gap_ls_sto, "gap_ls_eev": gap_ls_eev, "gap_ls_pi": gap_ls_pi, "gap_ls_ws": gap_ls_ws,
+            "book_accordo": booking_check.get("accordo_frac"),
+            "book_corr": booking_check.get("corr_f"),
+            "book_delta_cost": booking_check.get("delta_cost"),
         })
         istanza_outputs.append({
             "results_test": results_test, "scenario_ids_test": scenario_ids_test,
-            "x_test": x_test, "test_bench": test_bench,
+            "x_test": x_test, "test_bench": test_bench, "booking_check": booking_check,
             "costs_test": test_post_costs, "tc_test": test_post_tc, "pc_test": test_post_pc,
             "tours_test": test_post_tours, "solutions_test": test_post_solutions,
             "costs_test_pre": test_pre_costs, "tc_test_pre": test_pre_tc, "pc_test_pre": test_pre_pc,
@@ -1664,16 +1875,17 @@ def _run_utsp_test_only_branch(
     agg_test = _aggregate_test_instances(exp_name, istanza_metrics)
     print("\n" + "─" * 65)
     print(f"RIEPILOGO AGGREGATO SU {agg_test['n_istanze']} ISTANZE")
-    for k in ("UTSP_LS_test", "PI_test", "STO_test", "EEV_test", "gap_ls_sto", "gap_ls_eev", "gap_ls_pi"):
+    for k in ("UTSP_LS_test", "WS_test", "PI_test", "STO_test", "EEV_test",
+              "gap_ls_sto", "gap_ls_eev", "gap_ls_pi", "gap_ls_ws"):
         print(f"  {k}: media={agg_test[f'{k}_mean']:.4f}  std={agg_test[f'{k}_std']:.4f}")
     print("─" * 65)
 
-    agg_path = os.path.join(OUTPUT_DIR, "grafici", f"{exp_name}_test_only_aggregate.txt")
+    agg_path = out_path(f"{exp_name}_test_only_aggregate.txt", "report")
     os.makedirs(os.path.dirname(agg_path), exist_ok=True)
     with open(agg_path, "w", encoding="utf-8") as f:
         f.write(f"n_istanze={agg_test['n_istanze']}  dim_istanza_test={DIM_ISTANZA_TEST}\n")
-        for k in ("UTSP_LS_test", "PI_test", "PI_pren_test", "STO_test", "EEV_test",
-                   "gap_ls_sto", "gap_ls_eev", "gap_ls_pi"):
+        for k in ("UTSP_LS_test", "WS_test", "PI_test", "PI_pren_test", "STO_test", "EEV_test",
+                   "gap_ls_sto", "gap_ls_eev", "gap_ls_pi", "gap_ls_ws"):
             f.write(f"{k}_mean={agg_test[f'{k}_mean']:.6f}  {k}_std={agg_test[f'{k}_std']:.6f}\n")
 
     # Retrocompatibilità: chi si aspetta un solo x_test/UTSP_LS_test riceve l'ultima istanza.
@@ -1690,6 +1902,7 @@ def _run_utsp_test_only_branch(
         "UTSP_test_pre": last["UTSP_test_pre"],
         "UTSP_LS_test": last_m["UTSP_LS_test"],
         "PI_test": last_m["PI_test"],
+        "WS_test": last_m["WS_test"],
         "PI_pren_test": last_m["PI_pren_test"],
         "STO_test": last_m["STO_test"],
         "EEV_test": last_m["EEV_test"],
@@ -1745,9 +1958,8 @@ def _append_test_instance_block(exp_name, idx, n_istanze, x_test,
             f"{fmt(test_post_pc.get(sid)):>12} | {test_post_tours.get(sid, [])}"
         )
 
-    grafici_dir = os.path.join(OUTPUT_DIR, "grafici")
-    os.makedirs(grafici_dir, exist_ok=True)
-    stats_file = os.path.join(grafici_dir, f"{exp_name}_test_all_instances.txt")
+     
+    stats_file = out_path(f"{exp_name}_test_all_instances.txt", "report")
     mode = "w" if idx == 0 else "a"
     with open(stats_file, mode, encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -1809,14 +2021,23 @@ def _run_local_search_branch(
 
     print("\n  Train post-booking: LS con prenotazioni e multe ...")
     (train_post_costs, train_post_tc, train_post_pc,
-     train_post_tours, train_post_solutions, UTSP_LS_train) = _run_ls_on_scenarios(
-        model, xy, nodes, root, I, p, C,
-        results, scenario_ids, scenario_probs,
-        H_list_precomputed=H_train,
-        dist_scale=dist_scale, temperature=temperature,
-        device=device, x_ls=x_train, label="train_post_booking",
-        apply_penalties=True,
+    train_post_tours, train_post_solutions, UTSP_LS_train) = _run_ls_on_scenarios(
+       model, xy, nodes, root, I, p, C,
+       results, scenario_ids, scenario_probs,
+       H_list_precomputed=H_train,
+       dist_scale=dist_scale, temperature=temperature,
+       device=device, x_ls=x_train, label="train_post_booking",
+       apply_penalties=True,
+     )
+
+    compare_bookings_heatmap_vs_tours(
+        H_train, train_post_tours, train_post_tc,
+        scenario_ids, scenario_probs,
+        nodes, I, p, C, x_train,
+        exp_name=exp_name, label="train",
     )
+
+    pi_train_d = _compute_exact_free_costs_from_results(results, scenario_ids)
 
     pi_train_d = _compute_exact_free_costs_from_results(results, scenario_ids)
     PI_train_eval = _scenario_mean(pi_train_d, scenario_ids, scenario_probs)
@@ -1881,11 +2102,27 @@ def _run_local_search_branch(
             device=device, x_ls=x_test, label=f"{label_suffix}_post_booking",
             apply_penalties=True,
         )
-
+        
+        booking_check = compare_bookings_heatmap_vs_tours(
+            H_test, test_post_tours, test_post_tc,
+            scenario_ids_test, scenario_probs_test,
+            nodes, I, p, C, x_test,
+            exp_name=exp_name, label=f"{label_suffix}_istanza{idx}",
+        )
         pi_test_d = _compute_exact_free_costs_from_results(results_test, scenario_ids_test)
         PI_test = _scenario_mean(pi_test_d, scenario_ids_test, scenario_probs_test)
         pi_pren_test_d = _compute_pi_with_booking_costs_local(results_test, scenario_ids_test, I, p)
         PI_pren_test = _scenario_mean(pi_pren_test_d, scenario_ids_test, scenario_probs_test)
+        
+        
+         
+
+        # Se il PI non è stato calcolato (TESI_TEST_SKIP_PI=1) ma sta nel pool,
+        # lo si recupera da lì invece di rinunciarci.
+        if not np.isfinite(PI_test):
+            pi_pool_d = _pool_costs_by_model(scenario_ids_test, "PI")
+            if pi_pool_d:
+                PI_test = _scenario_mean(pi_pool_d, scenario_ids_test, scenario_probs_test)
 
         try:
             test_bench = validate_policies(
@@ -1898,22 +2135,26 @@ def _run_local_search_branch(
                 validation_seed=TEST_SCENARIO_SEED,
                 **scenario_kwargs,
             )
+            WS_test = test_bench.get("WS_val", float("nan"))
             STO_test = test_bench.get("STO_val", float("nan"))
             EEV_test = test_bench.get("EEV_val", float("nan"))
         except Exception as exc:
             print(f"  Attenzione: validate_policies istanza {idx} non riuscita: {exc}")
             test_bench = {}
+            WS_test = float("nan")
             STO_test = float("nan")
             EEV_test = float("nan")
 
         gap_ls_sto = (UTSP_LS_test - STO_test) / abs(STO_test) * 100 if STO_test and np.isfinite(STO_test) else float("nan")
         gap_ls_eev = (UTSP_LS_test - EEV_test) / abs(EEV_test) * 100 if EEV_test and np.isfinite(EEV_test) else float("nan")
         gap_ls_pi = (UTSP_LS_test - PI_test) / abs(PI_test) * 100 if PI_test and np.isfinite(PI_test) else float("nan")
+        gap_ls_ws = (UTSP_LS_test - WS_test) / abs(WS_test) * 100 if WS_test and np.isfinite(WS_test) else float("nan")
 
         print(f"\n  [Istanza {idx}] RIEPILOGO ({len(scenario_ids_test)} scenari)")
-        print(f"    PI={PI_test:.4f} PI+pren={PI_pren_test:.4f} "
+        print(f"    WS={WS_test:.4f} PI={PI_test:.4f} PI+pren={PI_pren_test:.4f} "
               f"UTSP={UTSP_LS_test:.4f} STO={STO_test:.4f} EEV={EEV_test:.4f}")
-        print(f"    Gap vs STO={gap_ls_sto:+.2f}% vs EEV={gap_ls_eev:+.2f}% vs PI={gap_ls_pi:+.2f}%")
+        print(f"    Gap vs WS={gap_ls_ws:+.2f}% vs STO={gap_ls_sto:+.2f}% "
+              f"vs EEV={gap_ls_eev:+.2f}% vs PI={gap_ls_pi:+.2f}%")
 
         # UN SOLO blocco leggero per istanza, accodato al file unico della cella.
         # (Le diagnostiche pesanti train/pipeline si scrivono UNA volta, fuori dal
@@ -1926,18 +2167,22 @@ def _run_local_search_branch(
             test_post_tours=test_post_tours,
             PI_test=PI_test, UTSP_LS_test=UTSP_LS_test,
             STO_test=STO_test, EEV_test=EEV_test,
-            gap_ls_sto=gap_ls_sto, gap_ls_eev=gap_ls_eev, gap_ls_pi=gap_ls_pi,
+            gap_ls_sto=gap_ls_sto, gap_ls_eev=gap_ls_eev, gap_ls_pi=gap_ls_pi, 
         )
 
         istanza_metrics.append({
             "idx": idx, "n_scenari": len(scenario_ids_test),
-            "UTSP_LS_test": UTSP_LS_test, "PI_test": PI_test, "PI_pren_test": PI_pren_test,
+            "UTSP_LS_test": UTSP_LS_test, "WS_test": WS_test,
+            "PI_test": PI_test, "PI_pren_test": PI_pren_test,
             "STO_test": STO_test, "EEV_test": EEV_test,
-            "gap_ls_sto": gap_ls_sto, "gap_ls_eev": gap_ls_eev, "gap_ls_pi": gap_ls_pi,
+            "gap_ls_sto": gap_ls_sto, "gap_ls_eev": gap_ls_eev, "gap_ls_pi": gap_ls_pi,"gap_ls_ws": gap_ls_ws,
+            "book_accordo": booking_check.get("accordo_frac"),
+            "book_corr": booking_check.get("corr_f"),
+            "book_delta_cost": booking_check.get("delta_cost"),
         })
         istanza_outputs.append({
             "results_test": results_test, "scenario_ids_test": scenario_ids_test,
-            "x_test": x_test, "test_bench": test_bench,
+            "x_test": x_test, "test_bench": test_bench, "booking_check": booking_check,
             "costs_test": test_post_costs, "tc_test": test_post_tc, "pc_test": test_post_pc,
             "tours_test": test_post_tours, "solutions_test": test_post_solutions,
             "costs_test_pre": test_pre_costs, "tc_test_pre": test_pre_tc, "pc_test_pre": test_pre_pc,
@@ -2053,6 +2298,7 @@ def _run_local_search_branch(
         "gap_ls_sto": gap_ls_sto,
         "gap_ls_eev": gap_ls_eev,
         "gap_ls_pi": gap_ls_pi,
+        "gap_ls_ws": gap_ls_ws,
         "costs_B_plot": costs_B_plot,
         "solutions_B_plot": solutions_B_plot,
         "UTSP_LS_B_plot": UTSP_LS_B_plot,
@@ -2137,7 +2383,7 @@ def _save_utsp_ls_summary(
 
     text = "\n".join(lines)
     print("\n" + text)
-    fname = os.path.join(OUTPUT_DIR, f"risultati_{exp_name}.txt")
+    fname = out_path(f"utsp_ls_{exp_name}.txt", "report")
     with open(fname, "w", encoding="utf-8") as f:
         f.write(text + "\n")
     print(f"\n  → Salvato: {fname}")

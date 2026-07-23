@@ -88,17 +88,17 @@ UTSP2_EPOCHS = 50
 UTSP2_STEP_LR = 10
 UTSP2_LOG_FREQ = 5
 
-# Loss weights (modalità SUM)
-UTSP2_LS_ALPHA   = 0.01
+# Loss weights 
+ 
 UTSP2_LAMBDA1    = 5.0
 UTSP2_LAMBDA2    = 1.0
 UTSP2_LAMBDA_D   = 3.0
 UTSP2_LAMBDA_E   = 0.5
-UTSP2_TEMP_SCALE = 0.5
+UTSP2_LAMBDA_B_DIV = 1.0   # lambda_B = |Omega| / divisore.  1.0 = comportamento attuale.
+UTSP2_TEMP_SCALE = 0.5 
 
-# Scalino booking: .sum su loss, .mean su decode
-UTSP2_ALPHA_LOSS   = 0.6
-UTSP2_ALPHA_DECODE = 4.0
+UTSP2_ALPHA_LOSS = 1.0   # saturazione booking/penalty in training
+
 
 # Temperatura kernel gaussiano adj = exp(-d/T)
 UTSP2_TEMP_MODE = "median"
@@ -108,7 +108,7 @@ UTSP2_TEMP_FIXED = 1.0
 UTSP2_DIST_SCALE_MODE = "mean_positive"
 
 UTSP2_INCLUDE_PENALTY = os.getenv("TESI_UTSP_INCLUDE_PENALTY", "1").strip() == "1"
-UTSP2_INCLUDE_ENTROPY = False
+UTSP2_INCLUDE_ENTROPY = True
 
 # ── Modalità ed esecuzione UTSP ──────────────────────────────────
 # "policy"       = x_utsp + secondo stadio Gurobi
@@ -158,6 +158,7 @@ UTSP_LS_K = 15
 UTSP_LS_BETA = 10.0
 UTSP_LS_RANDOM_SEED = 12345
 UTSP_LS_APPLY_INITIAL_2OPT = True
+UTSP2_LS_ALPHA   = 0.05   # esplorazione UCB nella local search  
 
 # NOTA: PERT non definisce GRID_SEARCH (a differenza di CVETT).
 # grid_search.py va quindi eseguito solo sotto TESI_EXPERIMENT=CVETT
