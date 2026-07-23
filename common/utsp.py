@@ -81,25 +81,46 @@ def _scattering_diffusion(W, feature):
     return buf[0]-buf[1], buf[1]-buf[2], buf[2]-buf[3], buf[3]-feature*0
 
 
+# Diffusione LUNGO L'ASSE SCENARIO (dim=0), non lungo i nodi.
+# Gli scenari sono estrazioni scambiabili: il layer deve commutare con le loro
+# permutazioni. Per Schur, il commutante della rappresentazione di S_K su R^K ha
+# dimensione 2 (generato da I e da J = matrice KxK di tutti 1, diviso K), quindi
+# OGNI mappa lineare cross-scenario equivariante e' della forma alpha*P + beta*P_medio.
+# I prof fissano alpha = beta = 0.5, che coincide col passo "lazy" di
+# _scattering_diffusion applicato al grafo completo sugli scenari (li' D^-1 W = J).
+# NOTA: J e' idempotente => M^t = (1/2^t)I + (1-1/2^t)J: iterare non aggiunge
+# struttura, sposta solo il mixing verso il consenso. Un passo solo.
+# NOTA: valido solo perche' dim=0 e' l'asse scenario di UNA istanza. Se un giorno
+# si batchano piu' istanze TSP, questa media accorpa istanze diverse ed e' sbagliata.
+def _scenario_diffusion(P):                       # P: (K, n, F)
+    return 0.5 * P + 0.5 * P.mean(dim=0, keepdim=True)
+
+
 #Combina i due tipi di diffusione sopra tramite attention: per ogni nodo calcola quanto è rilevante ciascuna delle 6 rappresentazioni
 # (2 da GCN + 4 da scattering) e le combina con pesi appresi. Poi passa attraverso due layer lineari. È il cuore della GNN
+# I 6 canali sono raddoppiati: per ognuno c'è la copia diffusa tra gli scenari del batch (12 canali totali).
 class _SCTConv(nn.Module):
     def __init__(self, hidden_dim):
         super().__init__()
         self.linear1 = nn.Linear(hidden_dim, hidden_dim)
         self.linear2 = nn.Linear(hidden_dim, hidden_dim)
         self.a       = nn.Parameter(torch.zeros(2 * hidden_dim, 1))
-    
+        # NOTA: vettore di attention separato per i canali cross-scenario, così la
+        # rete può preferire il consenso o il singolo scenario. Costa 2*hidden param.
+        self.a_x     = nn.Parameter(torch.zeros(2 * hidden_dim, 1))
+
     def forward(self, X, adj, device):
         h_A, h_A2, _ = _gcn_diffusion(adj, 3, X, device)
         h_A, h_A2    = _leaky(h_A), _leaky(h_A2)
         s1, s2, s3, s4 = _scattering_diffusion(adj, X)
         s1, s2, s3, s4 = [torch.abs(s) for s in (s1, s2, s3, s4)]
-        parts    = [h_A, h_A2, s1, s2, s3, s4]
-        a_inputs = torch.stack([torch.cat([X, p], dim=2) for p in parts], dim=1)
-        e        = torch.matmul(F.relu(a_inputs), self.a).squeeze(-1)
-        attn     = F.softmax(e, dim=1).unsqueeze(-1)
-        h_prime  = (attn * torch.stack(parts, dim=1)).sum(dim=1) # prima era mean
+        parts    = [h_A, h_A2, s1, s2, s3, s4]                    # per-scenario
+        cross    = [_scenario_diffusion(p) for p in parts]        # 0.5*p + 0.5*media scenari
+        q        = lambda ps: F.relu(torch.stack([torch.cat([X, p], dim=2) for p in ps], dim=1))
+        e        = torch.cat([torch.matmul(q(parts), self.a),
+                              torch.matmul(q(cross), self.a_x)], dim=1).squeeze(-1)
+        attn     = F.softmax(e, dim=1).unsqueeze(-1)              # softmax sui 12 canali
+        h_prime  = (attn * torch.stack(parts + cross, dim=1)).sum(dim=1) # prima era mean
         return _leaky(self.linear2(_leaky(self.linear1(h_prime))))
     
 
@@ -972,4 +993,3 @@ def run_esperimento_B_UTSP(
     output.update({"local_search": ls_out})
 
     return output
-
