@@ -138,15 +138,13 @@ _variant = os.getenv("TESI_VARIANT")
 if _variant is not None:
     OUTPUT_DIR = os.path.join(OUTPUT_DIR, "variants", _variant)
     TEST_SCENARIO_CACHE_DIR = os.path.join(OUTPUT_DIR, "pkl")
-    for _subdir in ("output", "grafici", "checkpoint", "pkl"):
-        os.makedirs(os.path.join(OUTPUT_DIR, _subdir), exist_ok=True)
+    _prepare_run_dirs(OUTPUT_DIR)
 
 _batch_sweep = os.getenv("TESI_BATCH_SWEEP")
 if _batch_sweep is not None:
     UTSP_BATCH_SIZE = int(_batch_sweep)
     OUTPUT_DIR = os.path.join(OUTPUT_DIR, "batch_sweep", f"BATCH_{UTSP_BATCH_SIZE}")
-    for _subdir in ("output", "grafici", "checkpoint", "pkl"):
-        os.makedirs(os.path.join(OUTPUT_DIR, _subdir), exist_ok=True)
+    _prepare_run_dirs(OUTPUT_DIR)
 
 # ============================================================
 # Sottocartella di test sweep (opzionale)
@@ -211,8 +209,7 @@ for _k in sorted(k for k in os.environ if k.startswith(_PREFIX)):
 _override = os.getenv("TESI_OUTPUT_OVERRIDE")
 if _override:
     OUTPUT_DIR = TRAIN_OUTPUT_DIR = os.path.abspath(_override)
-    for _subdir in ("output", "grafici", "checkpoint", "pkl"):
-        os.makedirs(os.path.join(OUTPUT_DIR, _subdir), exist_ok=True)
+    _prepare_run_dirs(OUTPUT_DIR)
 
 # Alcuni script lanciano sotto-processi che devono ereditare l'OUTPUT_DIR
 # risolto qui, batch sweep e override inclusi.

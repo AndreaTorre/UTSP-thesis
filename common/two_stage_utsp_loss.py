@@ -2,7 +2,7 @@
  
 
 import torch
-
+from tsp_utils import get_edge_value
 
  
 # PARAMETRI DEFAULT  
@@ -340,7 +340,7 @@ def two_stage_utsp_loss(
 # DECODIFICA: da x̃ a x ∈ {0,1} (usata dopo il training per estrarre la politica di primo stadio)
   
 
-def decode_booking_policy(H_list, I, nodes, I_mask, scenario_probs, alpha=DEFAULT_ALPHA, threshold=0.8):
+def decode_booking_policy(H_list, I, nodes, scenario_probs, p, C ):
     """
     Politica di prenotazione di primo stadio a partire dalle heatmap.
 
@@ -388,15 +388,21 @@ def format_loss_components(components, epoch=None):
 
 
 # per ogni arco in I stampa lo score e la decisione
-def check_booking_coverage(x_scores, I, threshold=0.8): # la threshold la gesticsco a mano qua ma non è coerente 
-    lines = ["Decisioni di prenotazione NN:"]
+def check_booking_coverage(x_scores, I, p, C):
+    """NOTA: stessa regola del decode (f > p/C). Prima usava threshold=0.8 su
+    x_scores, che ora sono frequenze d'uso stimate e non attivazioni: la
+    diagnostica avrebbe contraddetto la decisione effettiva."""
+    lines = ["Decisioni di prenotazione NN (regola f > p/C):"]
     n_booked = 0
     for edge in sorted(I):
         i, j  = edge
         score = x_scores.get((i, j), x_scores.get((j, i), 0.0))
-        flag  = "✓ PRENOTA" if score >= threshold else "✗ non prenota"
-        lines.append(f"  {{{i},{j}}}  x̃={score:.4f}  {flag}")
-        if score >= threshold:
+        C_val = get_edge_value(C, i, j)
+        soglia = get_edge_value(p, i, j) / C_val if C_val > 0 else float("inf")
+        book = score > soglia
+        flag  = "✓ PRENOTA" if book else "✗ non prenota"
+        lines.append(f"  {{{i},{j}}}  f={score:.4f}  soglia={soglia:.4f}  {flag}")
+        if book:
             n_booked += 1
     lines.append(f"  Totale prenotazioni: {n_booked}/{len(I)}")
     return "\n".join(lines)

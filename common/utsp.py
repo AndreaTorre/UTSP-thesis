@@ -543,7 +543,7 @@ def _train_utsp_2stage(
     return model, history, adj_stack, dist_model, xy_tile, probs_t, temperature,  dist_scale
     
     
-def _decode_policy(model, adj_stack, xy_tile, I, nodes, I_mask, probs_t, device):
+def _decode_policy(model, adj_stack, xy_tile, I, nodes, probs_t, p, C, device):
     K = adj_stack.size(0)
     model.eval()
     with torch.no_grad():
@@ -551,8 +551,7 @@ def _decode_policy(model, adj_stack, xy_tile, I, nodes, I_mask, probs_t, device)
 
     H_list = [compute_heatmap(T_batch[k:k+1]) for k in range(K)]
 
-    x_reserved, x_scores = decode_booking_policy(
-    H_list, I, nodes, I_mask, probs_t, alpha=UTSP2_LS_ALPHA )
+    x_reserved, x_scores = decode_booking_policy(H_list, I, nodes, probs_t, p, C)
     return x_reserved, x_scores, H_list, T_batch 
     
 # Diagnostica numerica su T e H dopo il passaggio nella GNN per possibili problemi     
@@ -892,7 +891,7 @@ def run_esperimento_B_UTSP(
 
     # Decode mantenuto solo come diagnostica della heatmap; la policy Gurobi non viene più usata.
     x_utsp, x_scores, H_list, T_batch = _decode_policy(
-        model, adj_stack, xy_tile, I, nodes, I_mask, probs_t, device,
+        model, adj_stack, xy_tile, I, nodes, probs_t, p, C, device,
     )
 
     debug_T_H(T_batch, H_list, name="dopo training UTSP")
@@ -923,7 +922,7 @@ def run_esperimento_B_UTSP(
         n_samples=5, seed=UTSP_TRAINING_SEED,
     )
     
-    print(f"\n{check_booking_coverage(x_scores, I)}")
+    print(f"\n{check_booking_coverage(x_scores, I, p, C)}")
     print(f"\n  Costo prenotazione UTSP diagnostico : {reservation_utsp:.4f}")
     
     # Visualizzazione dell'adiacenza dopo il kernel
