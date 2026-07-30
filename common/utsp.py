@@ -15,7 +15,7 @@ from config import (
     OUTPUT_DIR, TRAIN_OUTPUT_DIR, N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC, UTSP_BATCH_SIZE,
     TRAIN_SCENARIO_IDS_UTSP, DROP_LAST_TRAIN_BATCH, UTSP_TRAINING_SEED,
     UTSP2_HIDDEN, UTSP2_NLAYERS, UTSP2_EPOCHS, UTSP2_LR, UTSP2_STEP_LR, UTSP2_LOG_FREQ,
-    UTSP2_LAMBDA1, UTSP2_LAMBDA2, UTSP2_LAMBDA_D, UTSP2_LAMBDA_E,
+    UTSP2_LAMBDA1, UTSP2_LAMBDA2, UTSP2_LAMBDA_D, UTSP2_LAMBDA_E, UTSP2_ALPHA_LOSS,
     UTSP2_TEMP_MODE, UTSP2_TEMP_SCALE, UTSP2_TEMP_FIXED,UTSP2_LAMBDA_B_DIV,
     UTSP2_DIST_SCALE_MODE, UTSP2_INCLUDE_PENALTY, UTSP2_INCLUDE_ENTROPY, UTSP2_LS_ALPHA,
 )
@@ -120,6 +120,7 @@ class _SCTConv(nn.Module):
         e        = torch.cat([torch.matmul(q(parts), self.a),
                               torch.matmul(q(cross), self.a_x)], dim=1).squeeze(-1)
         attn     = F.softmax(e, dim=1).unsqueeze(-1)              # softmax sui 12 canali
+        self.last_cross_frac = float(attn[:, 6:].sum(dim=1).mean())   # massa media sui 6 canali cross
         h_prime  = (attn * torch.stack(parts + cross, dim=1)).sum(dim=1) # prima era mean
         return _leaky(self.linear2(_leaky(self.linear1(h_prime))))
     
@@ -148,13 +149,13 @@ class UTSP_GNN(nn.Module):
     #NUOVA
     def forward(self, xy, adj, device):
         B, N, _ = xy.shape
-        #x       = self.bn0(xy.reshape(B * N, 2)).reshape(B, N, 2)
+        adj = adj * (1.0 - torch.eye(N, device=device)).unsqueeze(0)   # azzera diagonale adiacenza (come il paper)
         x       = _leaky(self.in_proj(xy))
         hidden  = x
         for conv in self.convs:
             x = conv(x, adj, device)
             hidden = torch.cat([hidden, x], dim=-1)
-        logits = self.mlp2(_leaky(self.mlp1(hidden)))              # (B, N, N)
+        logits = self.mlp2(_leaky(self.mlp1(hidden)))
         return self.softmax(logits)                                # no mask diagonale
 
 # Normalizzo le coordinate in [0,1]
@@ -520,7 +521,7 @@ def _train_utsp_2stage(
 
             loss, comps = two_stage_utsp_loss(
                 T_list, dist_list, I_mask, p_mat, C_mat, bs["probs_t"],
-                alpha=UTSP2_LS_ALPHA, lambda1=UTSP2_LAMBDA1, lambda2=UTSP2_LAMBDA2,
+                alpha=UTSP2_ALPHA_LOSS, lambda1=UTSP2_LAMBDA1, lambda2=UTSP2_LAMBDA2,
                 lambda_e=UTSP2_LAMBDA_E,lambda_b_div=UTSP2_LAMBDA_B_DIV, lambda_d=UTSP2_LAMBDA_D,
                 include_penalty=UTSP2_INCLUDE_PENALTY,
                 include_entropy=UTSP2_INCLUDE_ENTROPY,
@@ -561,6 +562,10 @@ def _train_utsp_2stage(
 
     model.load_state_dict(best_state)
     model.eval()
+    with torch.no_grad():
+        _ = model(xy_tile, adj_stack, device)     # forward sul best_state per aggiornare last_cross_frac
+    fracs = [round(c.last_cross_frac, 3) for c in model.convs if hasattr(c, "last_cross_frac")]
+    print(f"[diag] attention media sui canali cross-scenario per layer: {fracs}")
     return model, history, adj_stack, dist_model, xy_tile, probs_t, temperature,  dist_scale
     
     

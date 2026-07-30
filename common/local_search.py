@@ -768,7 +768,8 @@ def _aggregate_test_instances(exp_name, istanza_metrics):
     """
     import numpy as np
     keys = ["UTSP_LS_test", "WS_test", "PI_test", "PI_pren_test", "STO_test", "EEV_test",
-            "gap_ls_sto", "gap_ls_eev", "gap_ls_pi", "gap_ls_ws",]
+            "gap_ls_sto", "gap_ls_eev", "gap_ls_pi", "gap_ls_ws",
+            "book_accordo", "book_corr", "book_delta_cost"]
     agg = {"n_istanze": len(istanza_metrics)}
     for k in keys:
         vals = [m[k] for m in istanza_metrics if m.get(k) is not None and np.isfinite(m[k])]
@@ -2037,7 +2038,7 @@ def _run_local_search_branch(
         exp_name=exp_name, label="train",
     )
 
-    pi_train_d = _compute_exact_free_costs_from_results(results, scenario_ids)
+    
 
     pi_train_d = _compute_exact_free_costs_from_results(results, scenario_ids)
     PI_train_eval = _scenario_mean(pi_train_d, scenario_ids, scenario_probs)
@@ -2124,20 +2125,29 @@ def _run_local_search_branch(
             if pi_pool_d:
                 PI_test = _scenario_mean(pi_pool_d, scenario_ids_test, scenario_probs_test)
 
+        # NOTA: era evaluation.validate_policies, che rigenerava gli scenari di
+        # test da zero e ri-risolveva il PI con Gurobi a ogni run (2000 MIP
+        # buttati, x486 nella grid). La versione cacheata riusa results_test e
+        # aggiunge WS. È la stessa già usata dal ramo test-only.
         try:
-            test_bench = validate_policies(
-                nodes, E, base_dist, root, env, I, p, C,
+            test_bench = _validate_policies_cached(
+                nodes, E, I, p, C, root, env,
                 res_B["x_used_sto"], res_B["x_ev"],
-                frequent_arcs, len(scenario_ids_test),
-                N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC,
-                exp_name=exp_name_i,
-                scenario_ids_val=scenario_ids_test,
-                validation_seed=TEST_SCENARIO_SEED,
-                **scenario_kwargs,
+                results_test, scenario_ids_test,
+                base_seed=TEST_SCENARIO_SEED,
+                frequent_arcs=frequent_arcs,
+                scenario_kwargs=scenario_kwargs,
             )
             WS_test = test_bench.get("WS_val", float("nan"))
             STO_test = test_bench.get("STO_val", float("nan"))
             EEV_test = test_bench.get("EEV_val", float("nan"))
+            
+            if "eev_costs" in test_bench and "sto_costs" in test_bench:
+                plot_cost_distributions(
+                    test_bench["eev_costs"], test_bench["sto_costs"], test_post_costs,
+                    exp_name_i, "test",
+                )
+                
         except Exception as exc:
             print(f"  Attenzione: validate_policies istanza {idx} non riuscita: {exc}")
             test_bench = {}
@@ -2188,8 +2198,31 @@ def _run_local_search_branch(
             "costs_test_pre": test_pre_costs, "tc_test_pre": test_pre_tc, "pc_test_pre": test_pre_pc,
             "tours_test_pre": test_pre_tours,
         })
+        
 
     agg_test = _aggregate_test_instances(exp_name, istanza_metrics)
+
+    print("\n" + "─" * 65)
+    print(f"RIEPILOGO AGGREGATO SU {agg_test['n_istanze']} ISTANZE "
+          f"(dim_istanza={DIM_ISTANZA_TEST}, {agg_test['n_istanze'] * DIM_ISTANZA_TEST} scenari totali)")
+    for k in ("UTSP_LS_test", "WS_test", "STO_test", "EEV_test", "PI_test",
+              "gap_ls_ws", "gap_ls_sto", "gap_ls_eev", "gap_ls_pi"):
+        if f"{k}_mean" in agg_test:
+            print(f"  {k}: media={agg_test[f'{k}_mean']:.4f}  std={agg_test[f'{k}_std']:.4f}")
+    print("─" * 65)
+
+    agg_path = out_path(f"{exp_name}_test_aggregate.txt", "report")
+    with open(agg_path, "w", encoding="utf-8") as f:
+        f.write(f"n_istanze={agg_test['n_istanze']}  dim_istanza_test={DIM_ISTANZA_TEST}  "
+                f"scenari_totali={agg_test['n_istanze'] * DIM_ISTANZA_TEST}\n")
+        for k in ("UTSP_LS_test", "WS_test", "PI_test", "PI_pren_test", "STO_test", "EEV_test",
+                  "gap_ls_ws", "gap_ls_sto", "gap_ls_eev", "gap_ls_pi",
+                  "book_accordo", "book_corr", "book_delta_cost"):
+            if f"{k}_mean" in agg_test:
+                f.write(f"{k}_mean={agg_test[f'{k}_mean']:.6f}  {k}_std={agg_test[f'{k}_std']:.6f}\n")
+    print(f"  → Salvato: {agg_path}")
+
+    # NOTA: per i grafici comparativi sul campione B e per i valori scalari
 
     # NOTA: per i grafici comparativi sul campione B e per i valori scalari
     # "piatti" restituiti sotto (retrocompatibilità con chi si aspetta un solo
