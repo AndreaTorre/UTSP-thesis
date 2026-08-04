@@ -53,9 +53,8 @@ cd "$ROOT/common"
 # NOTA: il primo DIM della lista (il più grande) scalda la cache PI per
 # tutti gli altri di quello stesso checkpoint: ordine decrescente non è
 # solo estetico, riduce il tempo totale della coda.
-find "$ROOT" -type f -path "*/batch_sweep/BATCH_*/train/*/utsp_model.pt" | sort | while read -r ckpt; do
-
-  if [[ ! "$ckpt" =~ /(PERT|CVETT)/RISULTATI_([0-9]+)/(variants/[^/]+/)?batch_sweep/BATCH_([0-9]+)/train/([^/]+)/utsp_model\.pt$ ]]; then
+find "$ROOT" -type f -path "*/batch_sweep/BATCH_*/modello/*/utsp_model.pt" | sort | while read -r ckpt; do
+  if [[ ! "$ckpt" =~ /(PERT|CVETT)/RISULTATI_([0-9]+)/(variants/[^/]+/)?batch_sweep/BATCH_([0-9]+)/modello/([^/]+)/utsp_model\.pt$ ]]; then
     echo "  Salto (path inatteso, non combacia con lo schema noto): $ckpt"
     continue
   fi

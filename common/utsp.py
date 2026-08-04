@@ -92,14 +92,25 @@ def _scattering_diffusion(W, feature):
 # struttura, sposta solo il mixing verso il consenso. Un passo solo.
 # NOTA: valido solo perche' dim=0 e' l'asse scenario di UNA istanza. Se un giorno
 # si batchano piu' istanze TSP, questa media accorpa istanze diverse ed e' sbagliata.
-def _scenario_diffusion(P):                       # P: (K, n, F)
+def _scenario_diffusion_media(P):                       # P: (K, n, F)
     return 0.5 * P + 0.5 * P.mean(dim=0, keepdim=True)
+    
+# questo usa la varibailità tra scenari e non la media
+def _scenario_diffusion(P, gamma=2.0, eps=1e-5):
+    """Canale cross-scenario: consenso (media batch) + anomalia standardizzata.
+    La media resta il riferimento (richiesta prof); z = (P-media)/std aggiunge il
+    secondo momento in una direzione separabile da P. A K=1: std=0 -> z=0 -> canale = P."""
+    mu = P.mean(dim=0, keepdim=True)
+    sd = P.std(dim=0, keepdim=True, unbiased=False)
+    z  = (P - mu) / (sd + eps)
+    return mu + gamma * z
 
 
 #Combina i due tipi di diffusione sopra tramite attention: per ogni nodo calcola quanto è rilevante ciascuna delle 6 rappresentazioni
 # (2 da GCN + 4 da scattering) e le combina con pesi appresi. Poi passa attraverso due layer lineari. È il cuore della GNN
 # I 6 canali sono raddoppiati: per ognuno c'è la copia diffusa tra gli scenari del batch (12 canali totali).
-class _SCTConv(nn.Module):
+
+class _SCTConv_6x6(nn.Module): #6x6 perchè questa usa due test peer la softmax
     def __init__(self, hidden_dim):
         super().__init__()
         self.linear1 = nn.Linear(hidden_dim, hidden_dim)
@@ -120,8 +131,36 @@ class _SCTConv(nn.Module):
         e        = torch.cat([torch.matmul(q(parts), self.a),
                               torch.matmul(q(cross), self.a_x)], dim=1).squeeze(-1)
         attn     = F.softmax(e, dim=1).unsqueeze(-1)              # softmax sui 12 canali
+        self.last_attn = attn.detach()
         self.last_cross_frac = float(attn[:, 6:].sum(dim=1).mean())   # massa media sui 6 canali cross
         h_prime  = (attn * torch.stack(parts + cross, dim=1)).sum(dim=1) # prima era mean
+        return _leaky(self.linear2(_leaky(self.linear1(h_prime))))
+        
+        
+class _SCTConv(nn.Module):
+    def __init__(self, hidden_dim):
+        super().__init__()
+        self.linear1 = nn.Linear(hidden_dim, hidden_dim)
+        self.linear2 = nn.Linear(hidden_dim, hidden_dim)
+        # NOTA: testa di attention UNICA sui 12 canali (6 per-scenario + 6 cross).
+        # Prima c'era una testa separata a_x per i cross: permetteva loro di vincere
+        # la softmax in blocco a prescindere dal contenuto. Con una testa sola ogni
+        # canale è punteggiato solo per [X, valore], parts e cross ad armi pari.
+        self.a       = nn.Parameter(torch.zeros(2 * hidden_dim, 1))
+
+    def forward(self, X, adj, device):
+        h_A, h_A2, _ = _gcn_diffusion(adj, 3, X, device)
+        h_A, h_A2    = _leaky(h_A), _leaky(h_A2)
+        s1, s2, s3, s4 = _scattering_diffusion(adj, X)
+        s1, s2, s3, s4 = [torch.abs(s) for s in (s1, s2, s3, s4)]
+        parts    = [h_A, h_A2, s1, s2, s3, s4]                    # per-scenario
+        cross    = [_scenario_diffusion_media(p) for p in parts]        # 0.5*p + 0.5*media scenari
+        chans    = parts + cross                                  # 12 canali
+        q        = F.relu(torch.stack([torch.cat([X, p], dim=2) for p in chans], dim=1))  # (B,12,n,2h)
+        e        = torch.matmul(q, self.a).squeeze(-1)            # (B,12,n) — stessa testa
+        attn     = F.softmax(e, dim=1).unsqueeze(-1)              # softmax sui 12 canali
+        self.last_attn = attn.detach()
+        h_prime  = (attn * torch.stack(chans, dim=1)).sum(dim=1)
         return _leaky(self.linear2(_leaky(self.linear1(h_prime))))
     
 
@@ -254,6 +293,42 @@ def _build_adj_robust_floor( dist_stack, tau=UTSP2_TEMP_SCALE,
     return adj
 
 
+def debug_scenario_flow(model, xy_b, adj_b, nodes, I_mask=None, k_max=None):
+    """Cosa fanno i canali cross-scenario. Va chiamata su UN'istanza, cioè su
+    un batch di scenari (default: come in training). Con k_max=1 vedi il regime
+    della local search, dove cross==parts e la diagnostica deve mostrarlo."""
+    n = len(nodes); off = ~torch.eye(n, dtype=torch.bool, device=xy_b.device)
+    if k_max: xy_b, adj_b = xy_b[:k_max], adj_b[:k_max]
+    model.eval()
+    with torch.no_grad():
+        Tb = model(xy_b, adj_b, xy_b.device)
+        for li, conv in enumerate(model.convs):
+            share = conv.last_attn.squeeze(-1)[:, 6:, :].sum(1)   # (K,n) massa sui cross
+            print(f"  layer{li}: attn cross media={share.mean():.3f} "
+                  f"min/max nodi={share.min():.3f}/{share.max():.3f} "
+                  f"std nodi={share.std():.3f}")
+        Hb = torch.stack([compute_heatmap(Tb[k:k+1]).squeeze(0) for k in range(len(xy_b))])
+        Hs = torch.stack([compute_heatmap(model(xy_b[k:k+1], adj_b[k:k+1], xy_b.device)
+                          ).squeeze(0) for k in range(len(xy_b))])
+    gap  = (Hb - Hs).abs()[:, off].mean() / (Hb[:, off].mean() + 1e-12)
+    dT   = (Tb.std(0)[off]  / (Tb.mean(0)[off]  + 1e-9)).mean()
+    dA   = (adj_b.std(0)[off]/ (adj_b.mean(0)[off]+ 1e-9)).mean()
+    print(f"  disp input adj = {dA:.3f} | disp output T = {dT:.3e}  (T<<adj => rete ignora lo scenario)")
+    print(f"  gap heatmap batched-vs-single = {gap:.2%}  (>0 solo se i cross agiscono)")
+    if I_mask is not None:
+        onI = I_mask.bool()
+        dI = (Hb.std(0)[onI]           / (Hb.mean(0)[onI]           + 1e-9)).mean()
+        dO = (Hb.std(0)[off & ~onI]    / (Hb.mean(0)[off & ~onI]    + 1e-9)).mean()
+        print(f"  disp H su I = {dI:.3f} | fuori I = {dO:.3f}  (vuoi basso su I, >0 fuori)")
+
+def _cross_share(model):
+    """Frazione media di attention sui 6 canali cross-scenario, per layer.
+    Legge last_attn dell'ultimo forward — richiede il hook in _SCTConv."""
+    shares = []
+    for conv in model.convs:
+        a = conv.last_attn.squeeze(-1)              # (K, 12, n)
+        shares.append(float(a[:, 6:, :].sum(dim=1).mean()))
+    return shares
 
 
 def _json_safe(obj):
@@ -541,15 +616,20 @@ def _train_utsp_2stage(
         avg_loss = epoch_loss / n_batches
         history["loss"].append(avg_loss)
         history["components"].append(epoch_comps)
-
+        
+        history["components"].append(epoch_comps)
+        cross = _cross_share(model)                 # dall'ultimo batch dell'epoca
+        history.setdefault("cross_share", []).append(cross)
+        
         if avg_loss < best_loss:
             best_loss  = avg_loss
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
         if epoch % UTSP2_LOG_FREQ == 0 or epoch == 1:
             marker = " ★" if abs(avg_loss - best_loss) < 1e-9 else ""
+            cs = " ".join(f"L{i}={v:.2f}" for i, v in enumerate(cross))
             print(f"  {format_loss_components(epoch_comps, epoch)} "
-                  f"avg={avg_loss:.5f}{marker}")
+                  f"avg={avg_loss:.5f}{marker} | cross {cs}")
 
     elapsed = time.time() - t0
     print(f"\n{'═'*65}")
@@ -921,6 +1001,12 @@ def run_esperimento_B_UTSP(
     )
 
     debug_T_H(T_batch, H_list, name="dopo training UTSP")
+    
+    kb = UTSP_BATCH_SIZE
+    print("\n[flow] regime training (batch di scenari):")
+    debug_scenario_flow(model, xy_tile[:kb], adj_stack[:kb], nodes, I_mask)
+    print("[flow] regime local-search (scenari singoli):")
+    debug_scenario_flow(model, xy_tile[:kb], adj_stack[:kb], nodes, I_mask, k_max=1)
 
     # Diagnostica adiacenza e heatmap
     _print_adj_matrix(adj_stack, nodes, label="Matrice adiacenza GNN (media scenari training)")

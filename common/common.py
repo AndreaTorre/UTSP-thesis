@@ -55,7 +55,8 @@ def load_env(max_wait_min=60, retry_sec=30):
         try:
             return _load_env_once()
         except gp.GurobiError as e:
-            if "token" in str(e).lower() and _time.time() < deadline:
+            msg = str(e).lower()
+            if ("token" in msg or "use limit" in msg or "10009" in msg) and _time.time() < deadline:
                 _time.sleep(retry_sec)
                 continue
             raise

@@ -45,7 +45,7 @@ SCEN_RE = re.compile(
     r"\s*([-\d.]+|N/A)\s*\|\s*([-\d.]+|N/A)\s*\|", re.M)
 PATH_RE = re.compile(
     r"/(?P<exp>PERT|CVETT)/RISULTATI_(?P<n>\d+)/(?:variants/(?P<variant>[^/]+)/)?batch_sweep/BATCH_(?P<b>\d+)"
-    r"/test/IS_(?P<is_>\d+)_DIM_(?P<dim>\d+)/")
+    r"/report/")
 IDX_RE = re.compile(r"_test_only_i(?P<i>\d+)_test_only_stats\.txt$")
 BLOCK_RE = re.compile(r"^#{5,}\s*\n#\s*ISTANZA\s+(?P<i>\d+)\s*\n#{5,}\s*\n", re.M)
 
@@ -76,8 +76,7 @@ def load(root, exp, nodes, dim_filter=None):
     _variant = os.getenv("TESI_VARIANT")
     _vseg = os.path.join("variants", _variant) if _variant else ""
     pat = os.path.join(root, exp, f"RISULTATI_{nodes}", _vseg, "batch_sweep", "BATCH_*",
-                       "test", f"IS_*_DIM_{dim_filter}" if dim_filter else "IS_*_DIM_*",
-                       "grafici", "*_test_all_instances.txt")
+                       "report", "*_test_all_instances.txt")
     rows = []
     for path in sorted(glob.glob(pat)):
         pm = PATH_RE.search(path.replace(os.sep, "/"))
@@ -99,10 +98,11 @@ def load(root, exp, nodes, dim_filter=None):
             except (ValueError, SyntaxError):
                 r["x"] = set()
             tour = multa = pren_post = 0.0
-            ns = nm = 0
+            ns = nm = dim_blk = 0
             scen_costs = []
             scen_by_sid = {}
             for m in SCEN_RE.finditer(blk):
+                dim_blk += 1              # DIM = numero di righe-scenario nel blocco
                 sid = int(m.group(1))
                 post, tc, pc = _num(m.group(3)), _num(m.group(4)), _num(m.group(5))
                 if post is None:
@@ -115,11 +115,13 @@ def load(root, exp, nodes, dim_filter=None):
                 scen_by_sid[sid] = post
                 if (pc or 0) > 1e-9:
                     nm += 1
-            r.update(batch=int(pm.group("b")), DIM=int(pm.group("dim")),
+            r.update(batch=int(pm.group("b")), DIM=dim_blk,
                      istanza=idx_ist, n_scen=ns, n_scen_multa=nm,
                      tot_post=pren_post, tot_tour=tour, tot_multa=multa,
                      scen_costs=scen_costs, scen_by_sid=scen_by_sid)
             rows.append(r)
+    if dim_filter is not None:
+        rows = [r for r in rows if r["DIM"] == dim_filter]
     return rows
 
 
