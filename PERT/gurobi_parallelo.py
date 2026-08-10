@@ -32,6 +32,7 @@ from tsp_utils import base_cost_undirected
 from gurobi_models import (
     build_I_from_medoid_outgoing_nodes,
     solve_exact_tsp,
+    solve_reservation_tsp,
     solve_stochastic,
 )
 from scenarios import (
@@ -182,21 +183,28 @@ def fase_pi():
 
         nodes = s["nodes"]; E = s["E"]; root = s["root"]
         results = s["results"]; scenario_ids = s["scenario_ids"]
+        I = s["I"]; p = s["p"]; C = s["C"]
 
-        pi_results = {}
+        pi_results = {}   # TSP libero: SOLO per archi frequenti / regola f^PI (non un bound)
+        ws_results = {}   # WS (wait-and-see): bound di informazione perfetta
         for idx, sid in enumerate(scenario_ids):
-            print(f"  PI scenario {sid} ({idx+1}/{len(scenario_ids)})...", end=" ")
+            print(f"  scenario {sid} ({idx+1}/{len(scenario_ids)})...", end=" ")
             t_s = time.time()
+            dist = results[sid]["scenario_dist"]
             exact_free = solve_exact_tsp(
-                nodes, E, results[sid]["scenario_dist"], root, env,
+                nodes, E, dist, root, env,
                 fixed_arcs=[], fixed_edges_undir=[], output_flag=0,
             )
-            dt = time.time() - t_s
-            length = exact_free["length"]
-            print(f"{'OK' if length else 'FAIL'} | PI = {length or 'N/A'} | {dt:.1f}s")
             pi_results[sid] = exact_free
+            ws = solve_reservation_tsp(
+                nodes, E, I, dist, root, p, C, env,
+                fixed_reservations=None, output_flag=0, model_name=f"ws_{sid}",
+            )
+            ws_results[sid] = ws
+            dt = time.time() - t_s
+            print(f"WS = {ws.get('total_cost')} | {dt:.1f}s")
 
-        _save("pi", {"pi_results": pi_results})
+        _save("pi", {"pi_results": pi_results, "ws_results": ws_results})
         print(f"\nPI completato in {time.time()-t0:.1f}s")
 
 
@@ -298,17 +306,24 @@ def fase_assemble():
     scenario_probs = s["scenario_probs"]
     I = s["I"]; b = s["b"]; p = s["p"]; C = s["C"]
 
-    # Inserisci i risultati PI dentro results
+    # Inserisci i risultati PI e WS dentro results
     for sid in scenario_ids:
         results[sid]["exact_free"] = pi["pi_results"][sid]
+        results[sid]["ws"] = pi["ws_results"][sid]
 
-    # PI medio (ricalcolato correttamente)
+    # PI (TSP libero): resta solo per gli archi frequenti / regola f^PI.
     pi_lengths = [
         results[sid]["exact_free"]["length"]
         for sid in scenario_ids
         if results[sid]["exact_free"]["length"] is not None
     ]
     PI = sum(pi_lengths) / len(scenario_ids)
+
+    # WS (wait-and-see): bound di informazione perfetta, pesato sugli scenari.
+    ws_costs = {sid: pi["ws_results"][sid].get("total_cost") for sid in scenario_ids}
+    WS = sum(scenario_probs[sid] * ws_costs[sid]
+             for sid in scenario_ids if ws_costs[sid] is not None)
+    print(f"\nWS (bound informazione perfetta) = {WS:.6f}")
 
     # STO
     res_stoch       = sto["res_stoch"]
@@ -352,6 +367,7 @@ def fase_assemble():
         frequent_arcs=s["frequent_arcs"],
         total_random_uses=s["total_random_uses"],
         random_impact_stats=random_impact_train,
+        WS=WS,
     )
 
     # Assemblaggio res_B
@@ -377,9 +393,11 @@ def fase_assemble():
         "stoch_solver_info":   stoch_solver_info,
         "tour_medio":          tour_medio,
         "arcs_medio":          arcs_medio,
-        "PI":                  PI,
+        "WS":                  WS,
         "STO":                 STO,
         "EEV":                 EEV,
+        "PI":                  PI,   # NOTA: solo dato interno (archi frequenti / f^PI), non bound
+
         "total_random_uses":   s["total_random_uses"],
         "random_impact_stats": random_impact_train,
     }

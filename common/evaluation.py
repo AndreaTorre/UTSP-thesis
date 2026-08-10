@@ -278,6 +278,7 @@ def print_and_save_summary(
         nne_metrics=None,          # output di evaluate_nne_model(...)
         nne_history=None,          # history restituito da train_nne_model(...)
         nne_extra=None,            # dizionario con x_nne, obj_surr, reservation_nne, ecc.
+        WS=None,                   # bound wait-and-see (informazione perfetta)
         scenario_probs=None):      # pesi degli scenari, se vuoi media pesata
 
     def fmt(x, nd=4):
@@ -368,10 +369,13 @@ def print_and_save_summary(
     lines += [
         "",
         "BENCHMARK MEDI SUI SCENARI",
-        f"PI: {fmt(PI)}",
-        f"PI (con prenotazioni): {fmt(PI_con_prenotazioni)}",
+        f"WS: {fmt(WS)}",
         f"STO: {fmt(STO)}",
         f"EEV: {fmt(EEV)}",
+        "",
+        "[diagnostica archi frequenti — NON bound di confronto]",
+        f"PI (TSP libero): {fmt(PI)}",
+        f"PI (con prenotazioni): {fmt(PI_con_prenotazioni)}",
     ]
 
     NNE_val = None
@@ -399,13 +403,14 @@ def print_and_save_summary(
 
     VSS_abs = EEV - STO
     gap_VSS = VSS_abs / abs(EEV) if EEV != 0 else float("nan")
-    gap_PI_STO = (STO - PI) / abs(PI) if PI != 0 else float("nan")
+    EVPI_abs = (STO - WS) if WS is not None else float("nan")
+    gap_EVPI = EVPI_abs / abs(WS) if WS not in (None, 0) else float("nan")
 
     lines += [
         "",
         "GAP",
         f"VSS = EEV - STO = {fmt(VSS_abs)} ({fmt_pct(gap_VSS)})",
-        f"Distanza diagnostica PI-STO = {fmt_pct(gap_PI_STO)}",
+        f"EVPI = STO - WS = {fmt(EVPI_abs)} ({fmt_pct(gap_EVPI)})",
     ]
 
     if NNE_val is not None:

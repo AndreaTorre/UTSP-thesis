@@ -6,7 +6,7 @@ import pickle
 import numpy as np
 
 from common import load_data, load_env, set_seed
-from config import ERA5_NC_PATH_TRAIN, ERA5_NC_PATH_TEST, OUTPUT_DIR, TEST_SCENARIO_CACHE_DIR
+from config import ERA5_NC_PATH_TRAIN, WIND_NC_PATH_EVAL, OUTPUT_DIR, TEST_SCENARIO_CACHE_DIR
 from experiment_B import run_esperimento_B_wind
 from utsp import run_esperimento_B_UTSP
 from wind_perturbation import load_wind_field
@@ -38,7 +38,7 @@ def main():
     nodes, coords, base_dist, E, root = load_data()
 
     wind_train = load_wind_field(ERA5_NC_PATH_TRAIN)
-    wind_test = load_wind_field(ERA5_NC_PATH_TEST)
+    wind_test = load_wind_field(WIND_NC_PATH_EVAL)   # test o validation secondo TESI_EVAL_SPLIT
     speed = np.hypot(wind_train["u100"][0], wind_train["v100"][0])
     print(f"[WIND TRAIN] istanti: {wind_train['n_times']} | "
           f"griglia: {len(wind_train['lats'])}x{len(wind_train['lons'])} | "

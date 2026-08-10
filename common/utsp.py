@@ -28,6 +28,7 @@ from local_search import _run_local_search_branch, _run_utsp_test_only_branch, _
 from two_stage_utsp_loss import (
     two_stage_utsp_loss,
     build_I_tensors,
+    build_dist_tensor,
     normalize_dist_tensor,
     decode_booking_policy,
     compute_heatmap,
@@ -50,6 +51,9 @@ _leaky = F.leaky_relu
 UTSP_REUSE_TRAIN = os.environ.get("TESI_REUSE_UTSP_TRAIN", "0").strip() == "1"
 UTSP_TEST_ONLY = os.environ.get("TESI_UTSP_TEST_ONLY", "0").strip() == "1"
 UTSP_TRAIN_NAME = os.environ.get("TESI_UTSP_TRAIN_NAME", "").strip()
+# TESI_USE_CROSS=0 → ablation senza canali cross-scenario (default: 1, attivi).
+# Va messo a 0 quando si testa/allena il modello no-cross.
+USE_CROSS = os.environ.get("TESI_USE_CROSS", "1").strip().lower() not in {"0", "false", "no"}
 
 
 # Prende il grafo (matrice di adiacenza W) e "propaga" le feature dei nodi attraverso i vicini.
@@ -71,14 +75,14 @@ def _gcn_diffusion(W, order, feature, device):
 #per 16 iterazioni e cattura le differenze tra scale diverse (buf[0]-buf[1], ecc.).
 # È come una wavelet: cattura struttura locale a diverse risoluzioni del grafo.
 def _scattering_diffusion(W, feature):
-    deg, D = torch.sum(W, 2, keepdim=True).clamp(min=1e-9), None
+    deg = torch.sum(W, 2, keepdim=True).clamp(min=1e-9)   # out-degree
     D   = torch.pow(deg, -1)
     buf, x = [], feature
-    for i in range(16):
-        x = 0.5 * x + 0.5 * torch.bmm(W, D * x)
-        if i in [0, 1, 3, 7]:
-            buf.append(x)
-    return buf[0]-buf[1], buf[1]-buf[2], buf[2]-buf[3], buf[3]-feature*0
+    for i in range(8):                       # NOTA: era range(16); si usano solo gli step 0,1,3,7
+        x = 0.5 * x + 0.5 * torch.bmm(W, D * x)   # lazy random walk: 1/2 (I + W D^{-1}) x
+        if i in (0, 1, 3, 7):
+            buf.append(x)                    # buf = [v^1, v^2, v^4, v^8]
+    return buf[0] - buf[1], buf[1] - buf[2], buf[2] - buf[3], buf[3]  # s1,s2,s3,s4
 
 
 # Diffusione LUNGO L'ASSE SCENARIO (dim=0), non lungo i nodi.
@@ -92,51 +96,40 @@ def _scattering_diffusion(W, feature):
 # struttura, sposta solo il mixing verso il consenso. Un passo solo.
 # NOTA: valido solo perche' dim=0 e' l'asse scenario di UNA istanza. Se un giorno
 # si batchano piu' istanze TSP, questa media accorpa istanze diverse ed e' sbagliata.
+# Canale cross-scenario: consenso d'istanza (media sugli scenari del batch) mixato
+# 50/50 col segnale per-scenario. A K=1 la media è lo scenario stesso ⇒ canale = P.
+#
+# Hook di cross-pollination (ablation causale): si può iniettare il consenso di
+# un'istanza DONATRICE al posto di quello vero. off = normale (default, identico a
+# prima); record = registra le medie di consenso di una passata; inject = riusa
+# quelle registrate. Nessun effetto finché il modo resta "off".
+_XPOLL = {"mode": "off", "buf": [], "i": 0}
+
+
+def xpoll_mode(mode):
+    """Imposta il modo del hook: 'off' | 'record' | 'inject'.
+    'record' azzera il buffer; 'inject' riparte a leggerlo dall'inizio."""
+    _XPOLL["mode"] = mode
+    if mode == "record":
+        _XPOLL["buf"] = []
+    if mode in ("record", "inject"):
+        _XPOLL["i"] = 0
+
+
 def _scenario_diffusion_media(P):                       # P: (K, n, F)
+    if _XPOLL["mode"] == "record":
+        mu = P.mean(dim=0, keepdim=True)
+        _XPOLL["buf"].append(mu.detach())
+        return 0.5 * P + 0.5 * mu
+    if _XPOLL["mode"] == "inject":
+        mu = _XPOLL["buf"][_XPOLL["i"]]
+        _XPOLL["i"] += 1
+        return 0.5 * P + 0.5 * mu
     return 0.5 * P + 0.5 * P.mean(dim=0, keepdim=True)
     
-# questo usa la varibailità tra scenari e non la media
-def _scenario_diffusion(P, gamma=2.0, eps=1e-5):
-    """Canale cross-scenario: consenso (media batch) + anomalia standardizzata.
-    La media resta il riferimento (richiesta prof); z = (P-media)/std aggiunge il
-    secondo momento in una direzione separabile da P. A K=1: std=0 -> z=0 -> canale = P."""
-    mu = P.mean(dim=0, keepdim=True)
-    sd = P.std(dim=0, keepdim=True, unbiased=False)
-    z  = (P - mu) / (sd + eps)
-    return mu + gamma * z
-
-
-#Combina i due tipi di diffusione sopra tramite attention: per ogni nodo calcola quanto è rilevante ciascuna delle 6 rappresentazioni
-# (2 da GCN + 4 da scattering) e le combina con pesi appresi. Poi passa attraverso due layer lineari. È il cuore della GNN
-# I 6 canali sono raddoppiati: per ognuno c'è la copia diffusa tra gli scenari del batch (12 canali totali).
-
-class _SCTConv_6x6(nn.Module): #6x6 perchè questa usa due test peer la softmax
-    def __init__(self, hidden_dim):
-        super().__init__()
-        self.linear1 = nn.Linear(hidden_dim, hidden_dim)
-        self.linear2 = nn.Linear(hidden_dim, hidden_dim)
-        self.a       = nn.Parameter(torch.zeros(2 * hidden_dim, 1))
-        # NOTA: vettore di attention separato per i canali cross-scenario, così la
-        # rete può preferire il consenso o il singolo scenario. Costa 2*hidden param.
-        self.a_x     = nn.Parameter(torch.zeros(2 * hidden_dim, 1))
-
-    def forward(self, X, adj, device):
-        h_A, h_A2, _ = _gcn_diffusion(adj, 3, X, device)
-        h_A, h_A2    = _leaky(h_A), _leaky(h_A2)
-        s1, s2, s3, s4 = _scattering_diffusion(adj, X)
-        s1, s2, s3, s4 = [torch.abs(s) for s in (s1, s2, s3, s4)]
-        parts    = [h_A, h_A2, s1, s2, s3, s4]                    # per-scenario
-        cross    = [_scenario_diffusion(p) for p in parts]        # 0.5*p + 0.5*media scenari
-        q        = lambda ps: F.relu(torch.stack([torch.cat([X, p], dim=2) for p in ps], dim=1))
-        e        = torch.cat([torch.matmul(q(parts), self.a),
-                              torch.matmul(q(cross), self.a_x)], dim=1).squeeze(-1)
-        attn     = F.softmax(e, dim=1).unsqueeze(-1)              # softmax sui 12 canali
-        self.last_attn = attn.detach()
-        self.last_cross_frac = float(attn[:, 6:].sum(dim=1).mean())   # massa media sui 6 canali cross
-        h_prime  = (attn * torch.stack(parts + cross, dim=1)).sum(dim=1) # prima era mean
-        return _leaky(self.linear2(_leaky(self.linear1(h_prime))))
-        
-        
+# Combina i due tipi di diffusione tramite attention: per ogni nodo pesa le 6
+# rappresentazioni (2 GCN + 4 scattering) più le 6 copie cross-scenario (12 in
+# tutto), le combina, e passa da due layer lineari. È il cuore della GNN.
 class _SCTConv(nn.Module):
     def __init__(self, hidden_dim):
         super().__init__()
@@ -154,11 +147,13 @@ class _SCTConv(nn.Module):
         s1, s2, s3, s4 = _scattering_diffusion(adj, X)
         s1, s2, s3, s4 = [torch.abs(s) for s in (s1, s2, s3, s4)]
         parts    = [h_A, h_A2, s1, s2, s3, s4]                    # per-scenario
-        cross    = [_scenario_diffusion_media(p) for p in parts]        # 0.5*p + 0.5*media scenari
-        chans    = parts + cross                                  # 12 canali
-        q        = F.relu(torch.stack([torch.cat([X, p], dim=2) for p in chans], dim=1))  # (B,12,n,2h)
-        e        = torch.matmul(q, self.a).squeeze(-1)            # (B,12,n) — stessa testa
-        attn     = F.softmax(e, dim=1).unsqueeze(-1)              # softmax sui 12 canali
+        # NOTA: TESI_USE_CROSS=0 spegne i canali cross-scenario (ablation): 6 canali
+        # invece di 12. I parametri (linear1/linear2/a) NON cambiano forma, quindi
+        # un checkpoint no-cross si carica e va valutato con il forward no-cross.
+        chans    = parts + [_scenario_diffusion_media(p) for p in parts] if USE_CROSS else list(parts)
+        q        = F.relu(torch.stack([torch.cat([X, p], dim=2) for p in chans], dim=1))
+        e        = torch.matmul(q, self.a).squeeze(-1)
+        attn     = F.softmax(e, dim=1).unsqueeze(-1)              # softmax sui canali
         self.last_attn = attn.detach()
         h_prime  = (attn * torch.stack(chans, dim=1)).sum(dim=1)
         return _leaky(self.linear2(_leaky(self.linear1(h_prime))))
@@ -167,25 +162,12 @@ class _SCTConv(nn.Module):
 class UTSP_GNN(nn.Module):
     def __init__(self, n_nodes, hidden_dim, n_layers):
         super().__init__()
-        #self.bn0     = nn.BatchNorm1d(2) # pensavo fosse utile per le distanze normalizzate ma non cambia nulla, quindi non lo uso
         self.in_proj = nn.Linear(2, hidden_dim)
         self.convs   = nn.ModuleList([_SCTConv(hidden_dim) for _ in range(n_layers)])
         self.mlp1    = nn.Linear(hidden_dim * (1 + n_layers), hidden_dim)
         self.mlp2    = nn.Linear(hidden_dim, n_nodes)
         self.softmax = nn.Softmax(dim=1)
-        
-# ORIGINALE
-#    def forward(self, xy, adj, device):
-#      B, N, _ = xy.shape
-#      x       = self.bn0(xy.reshape(B * N, 2)).reshape(B, N, 2)
-#      x       = _leaky(self.in_proj(x))
-#      hidden  = x
-#      for conv in self.convs:
-#          x = conv(x, adj, device)
-#          hidden = torch.cat([hidden, x], dim=-1)
-#      return self.softmax(self.mlp2(_leaky(self.mlp1(hidden))))
-      
-    #NUOVA
+
     def forward(self, xy, adj, device):
         B, N, _ = xy.shape
         adj = adj * (1.0 - torch.eye(N, device=device)).unsqueeze(0)   # azzera diagonale adiacenza (come il paper)
@@ -232,65 +214,15 @@ def _build_input_tensors(scenario_ids, results, nodes, coords, device):
     xy = _normalize_coords(nodes, coords, device)  # (n, 2)
     xy_tile = xy.unsqueeze(0).expand(K, -1, -1).contiguous() # (K, n, 2)
 
-    # Distanze reali per ogni scenario
-    dist_raw = []
-    for sid in scenario_ids:
-        sd = results[sid]["scenario_dist"]
-        D  = torch.zeros(n, n, device=device)
-        for ii, i in enumerate(nodes):
-            for jj, j in enumerate(nodes):
-                if i != j:
-                    D[ii, jj] = float(sd[i][j])
-        dist_raw.append(D)
-
+    # Distanze reali per ogni scenario (helper condiviso, vedi two_stage_utsp_loss)
+    dist_raw = [build_dist_tensor(results[sid]["scenario_dist"], nodes, device)
+                for sid in scenario_ids]
     dist_stack = torch.stack(dist_raw, dim=0)  # (K, n, n)
 
-    # Normalizzazione interna UTSP
-    dist_model, dist_scale = normalize_dist_tensor(
-        dist_stack, mode=UTSP2_DIST_SCALE_MODE
-    )
-
-    temperature = _compute_temperature(
-        dist_model, UTSP2_TEMP_MODE, UTSP2_TEMP_SCALE, UTSP2_TEMP_FIXED
-    )
+    dist_model, dist_scale = normalize_dist_tensor(dist_stack, mode=UTSP2_DIST_SCALE_MODE)
+    temperature = _compute_temperature(dist_model, UTSP2_TEMP_MODE, UTSP2_TEMP_SCALE, UTSP2_TEMP_FIXED)
 
     return xy_tile, dist_raw, dist_model, dist_scale, temperature
-    
-
-
-#altra possibile formulazione AL MOMENTO NON LA STO USANDO PERCHE QUELLA DEL PAPER FUNZIONA
-#tau : temperatura del kernel dopo riscalatura robusta
-# eps : peso minimo morbido per ogni arco fuori diagonale
-# q_scale : quantile usato come scala di riga
-# clip_max : massimo valore normalizzato prima del kernel
-def _build_adj_robust_floor( dist_stack, tau=UTSP2_TEMP_SCALE,
-    eps=0.02, q_scale=0.90, clip_max=3.0, ): 
-
-    K, n, _ = dist_stack.shape
-    device = dist_stack.device
-
-    D_scaled = torch.zeros_like(dist_stack)
-
-    for s in range(K):
-        for i in range(n):
-            row = dist_stack[s, i].clone()
-            row[i] = float("inf")
-
-            vals = row[torch.isfinite(row)]
-            vals = vals[vals > 0]
-
-            if vals.numel() == 0:
-                scale_i = torch.tensor(1.0, device=device)
-            else:
-                scale_i = torch.quantile(vals, q_scale).clamp(min=1e-9)
-
-            D_scaled[s, i] = dist_stack[s, i] / scale_i
-
-    D_scaled = torch.clamp(D_scaled, min=0.0, max=clip_max)
-    adj = torch.exp(-D_scaled / max(tau, 1e-9))
-    # soglia minima morbida: ogni arco fuori diagonale resta visibile
-    adj = eps + (1.0 - eps) * adj
-    return adj
 
 
 def debug_scenario_flow(model, xy_b, adj_b, nodes, I_mask=None, k_max=None):
@@ -568,7 +500,6 @@ def _train_utsp_2stage(
 
     K_batch = batch_slices[0]["K"]
     print(f"\n  Training UTSP 2-stage | device={device} | n_params={n_par:,}")
-    print(f"\n  Training UTSP 2-stage | device={device} | n_params={n_par:,}")
     print(f"  GNN({n}→{UTSP2_HIDDEN}×{UTSP2_NLAYERS}) | "
           f"K_total={K} ({n_batches} batch × {K_batch}) | T={temperature:.4f} | scale={dist_scale:.4f}")
     print(f"  Epoche={UTSP2_EPOCHS}  lr={UTSP2_LR}  "
@@ -615,9 +546,7 @@ def _train_utsp_2stage(
 
         avg_loss = epoch_loss / n_batches
         history["loss"].append(avg_loss)
-        history["components"].append(epoch_comps)
-        
-        history["components"].append(epoch_comps)
+        history["components"].append(epoch_comps)   # NOTA: era appeso due volte (history disallineata per epoca)
         cross = _cross_share(model)                 # dall'ultimo batch dell'epoca
         history.setdefault("cross_share", []).append(cross)
         

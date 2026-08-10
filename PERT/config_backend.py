@@ -41,14 +41,11 @@ else:
     )
 
 # ── Parametri generali ────────────────────────────────────────────
-GLOBAL_SEED = 42
+
 N_TRAINING_SCENARIOS = 8
 DO_VALIDATION = True
 N_VALIDATION_SCENARIOS = 300
 SCENARIO_IDS = list(range(1, N_TRAINING_SCENARIOS + 1))
-FINAL_SCENARIO_SEED = GLOBAL_SEED
-CALIBRATION_SCENARIO_SEED = 30
-VALIDATION_SEED = 99
 
 
 PI_TIME_LIMIT  = 300     # secondi, per singolo scenario PI
@@ -142,21 +139,26 @@ DROP_LAST_TRAIN_BATCH = os.environ.get("TESI_DROP_LAST_TRAIN_BATCH", "1").strip(
 # N_ISTANZE_TEST (iniettati da common/config.py). Il default copre esattamente
 # il caso peggiore N_ISTANZE_TEST x DIM_ISTANZA_TEST; per un test sweep con
 # combinazioni più grandi, alza TESI_N_TEST_SCENARIOS_UTSP di conseguenza.
-TEST_SCENARIO_SEED = int(os.environ.get("TESI_TEST_SCENARIO_SEED", 1_000_000))
+# I due pool: intervalli effettivi (base+id) disgiunti da train (43..3042).
+#   validation → 500_001..(500_000+N)   test → 1_000_001..(1_000_000+N)
+# EVAL_SPLIT (iniettato da common/config.py) sceglie quale valuta la rete.
+NETWORK_TEST_SEED = int(os.environ.get("TESI_TEST_SCENARIO_SEED", 1_000_000))
+NETWORK_VAL_SEED  = int(os.environ.get("TESI_VAL_SCENARIO_SEED",    500_000))
+
 N_TEST_SCENARIOS_UTSP = int(os.environ.get(
     "TESI_N_TEST_SCENARIOS_UTSP",
     DIM_ISTANZA_TEST * N_ISTANZE_TEST,
 ))
 TEST_SCENARIO_IDS_UTSP = list(range(1, N_TEST_SCENARIOS_UTSP + 1))
 
-UTSP_TRAINING_SEED = GLOBAL_SEED
+
 UTSP_LS_MAX_ACTIONS = 5000
 UTSP_LS_ACTIONS_PER_ROUND = 120
 UTSP_LS_MAX_RESTARTS = 80
 UTSP_LS_M = 8
 UTSP_LS_K = 15
 UTSP_LS_BETA = 10.0
-UTSP_LS_RANDOM_SEED = 12345
+
 UTSP_LS_APPLY_INITIAL_2OPT = True
 UTSP2_LS_ALPHA   = 0.05   # esplorazione UCB nella local search  
 

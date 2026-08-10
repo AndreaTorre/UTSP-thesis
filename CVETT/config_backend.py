@@ -89,7 +89,7 @@ N_WIND_OBSERVATIONS_TRAIN = _env_int(
 
 N_WIND_OBSERVATIONS_TEST = _env_int(
     "TESI_N_WIND_OBSERVATIONS_TEST",
-    _count_wind_observations(WIND_NC_PATH_TEST, WIND_TIME_NAME),
+    _count_wind_observations(WIND_NC_PATH_EVAL, WIND_TIME_NAME),   # eval = test o val
 )
 
 if N_WIND_OBSERVATIONS_TRAIN <= 0:
@@ -116,25 +116,10 @@ ESPERIMENTI_DA_ESEGUIRE = ["B", "B_UTSP"]
 # SEMI
 # ============================================================
 
-GLOBAL_SEED = _env_int("TESI_GLOBAL_SEED", 42)
-
-# Seme comune per tutte le estrazioni dal file train:
-# STO, EEV, PI e UTSP.
-TRAIN_SCENARIO_SEED = _env_int("TESI_TRAIN_SCENARIO_SEED", 50)
-
-CALIBRATION_SCENARIO_SEED = TRAIN_SCENARIO_SEED
+# NOTA: semi iniettati da common/config.py (unica fonte, identici a PERT).
+# Qui restano solo gli alias interni che il resto del codice CVETT usa.
 UTSP_TRAINING_SCENARIO_SEED = TRAIN_SCENARIO_SEED
-
-# Seme comune per tutte le valutazioni sul file test.
-TEST_SCENARIO_SEED = _env_int("TESI_TEST_SCENARIO_SEED", 99)
-
-FINAL_SCENARIO_SEED = TEST_SCENARIO_SEED
 UTSP_TEST_SCENARIO_SEED = TEST_SCENARIO_SEED
-
-VALIDATION_SEED = _env_int("TESI_VALIDATION_SEED", 123)
-
-UTSP_TRAINING_SEED = GLOBAL_SEED
-UTSP_LS_RANDOM_SEED = _env_int("TESI_UTSP_LS_RANDOM_SEED", 12345)
 
 
 # ============================================================

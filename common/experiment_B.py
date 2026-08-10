@@ -12,8 +12,8 @@ from config import (
     DO_VALIDATION, N_VALIDATION_SCENARIOS, OUTPUT_DIR,
 )
 from tsp_utils import base_cost_undirected
-from gurobi_models import build_I_from_medoid_outgoing_nodes, solve_stochastic
-from scenarios import find_frequent_arcs, generate_scenarios
+from gurobi_models import build_I_from_medoid_outgoing_nodes, solve_reservation_tsp, solve_stochastic
+from scenarios import find_frequent_arcs, generate_scenarios, build_scenario_dist
 from evaluation import (
     compute_eev_medione, compute_random_edge_usage_stats,
     print_and_save_summary, validate_policies,
@@ -175,13 +175,25 @@ def run_esperimento_B(nodes, coords, base_dist, E, root, env):
         stoch_solutions=res_stoch.get("scenario_solutions", {}),
         eev_solutions=eev_solutions)
 
+    # WS (wait-and-see): bound di informazione perfetta (x libera per scenario).
+    ws_costs = {}
+    for sid in scenario_ids:
+        r_ws = solve_reservation_tsp(
+            nodes, E, I, build_scenario_dist(base_dist, results[sid]["pert"]),
+            root, p, C, env, fixed_reservations=None, output_flag=0,
+            model_name=f"ws_{sid}")
+        ws_costs[sid] = r_ws.get("total_cost")
+    WS = sum(scenario_probs[sid] * ws_costs[sid]
+             for sid in scenario_ids if ws_costs[sid] is not None)
+    print(f"WS (bound informazione perfetta) = {WS:.6f}")
+
     print_and_save_summary(
         exp_name, scenario_ids, results, eev_costs, eev_tour_costs_ev,
         eev_penalty_costs_ev, stoch_costs, stoch_tour_c, stoch_penalty_c,
         PI, STO, EEV, I=I, p=p, C=C, b=b,
         stoch_solver_info=stoch_solver_info, frequent_arcs=frequent_arcs,
         total_random_uses=total_random_uses,
-        random_impact_stats=random_impact_train)
+        random_impact_stats=random_impact_train, WS=WS)
 
     # ── STEP 6: Validazione out-of-sample ────────────────────────
     if last >= 6:
@@ -222,6 +234,7 @@ def run_esperimento_B(nodes, coords, base_dist, E, root, env):
         "stoch_solver_info": stoch_solver_info,
         "tour_medio":      tour_medio,
         "arcs_medio":      arcs_medio,
+        "WS":              WS,
         "PI":              PI,
         "STO":             STO,
         "EEV":             EEV,
@@ -348,6 +361,18 @@ def run_esperimento_B_wind(nodes, coords, base_dist, E, root, env, wind):
         stoch_solutions=res_stoch.get("scenario_solutions", {}),
         eev_solutions=eev_solutions)
 
+    # WS (wait-and-see): bound di informazione perfetta (x libera per scenario).
+    ws_costs = {}
+    for sid in scenario_ids:
+        r_ws = solve_reservation_tsp(
+            nodes, E, I, build_scenario_dist(base_dist, results[sid]["pert"]),
+            root, p, C, env, fixed_reservations=None, output_flag=0,
+            model_name=f"ws_{sid}")
+        ws_costs[sid] = r_ws.get("total_cost")
+    WS = sum(scenario_probs[sid] * ws_costs[sid]
+             for sid in scenario_ids if ws_costs[sid] is not None)
+    print(f"WS (bound informazione perfetta) = {WS:.6f}")
+
     print_and_save_summary(
         exp_name, scenario_ids, results,
         eev_costs, eev_tour_costs_ev, eev_penalty_costs_ev,
@@ -355,7 +380,7 @@ def run_esperimento_B_wind(nodes, coords, base_dist, E, root, env, wind):
         PI, STO, EEV, I=I, p=p, C=C, b=b,
         stoch_solver_info=stoch_solver_info, frequent_arcs=frequent_arcs,
         total_random_uses=total_random_uses,
-        random_impact_stats=random_impact_train)
+        random_impact_stats=random_impact_train, WS=WS)
 
     # ── STEP 5: Validazione out-of-sample ────────────────────────
     if last >= 5:
@@ -398,6 +423,7 @@ def run_esperimento_B_wind(nodes, coords, base_dist, E, root, env, wind):
         "stoch_solver_info":   stoch_solver_info,
         "tour_medio":          tour_medio,
         "arcs_medio":          arcs_medio,
+        "WS":                  WS,
         "PI":                  PI,
         "STO":                 STO,
         "EEV":                 EEV,

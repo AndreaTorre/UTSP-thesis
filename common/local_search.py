@@ -40,7 +40,7 @@ from scenarios import generate_scenarios
 from evaluation import (
     validate_policies, genera_grafici_utsp, plot_cost_distributions,
 )
-from two_stage_utsp_loss import compute_heatmap
+from two_stage_utsp_loss import compute_heatmap, build_dist_tensor
 
 # DIPENDENZE E LOCAL SEARCH 
  
@@ -49,20 +49,6 @@ def tour_cost(tour, dist):
     n = len(tour)
     return sum(dist[tour[k]][tour[(k + 1) % n]] for k in range(n))
 
-# decodifica H e tour con gurobi e non local search
-def _decode_tour_gurobi(H, nodes, E, root, env):
-    node_idx = {v: k for k, v in enumerate(nodes)}
-    dist_neg = {
-        i: {j: -float(H[node_idx[i], node_idx[j]])
-            for j in nodes if j != i}
-        for i in nodes
-    }
-    return solve_exact_tsp(nodes, E, dist_neg, root, env)
-
-
- 
-# LOCAL SEARCH STILE UTSP PAPER, ADATTATA AL CASO ORIENTATO 
-# Ruota un tour senza ripetizione finale in modo che inizi da start.
 def _rotate_tour_to_start(tour, start):
     
     if not tour or start not in tour:
@@ -88,39 +74,6 @@ def _tour_cost_on_dist(tour, dist):
 # Nel TSP asimmetrico l'inversione cambia i versi degli archi: non uso formule
 # incrementali simmetriche, ma rivaluto tutto il tour.
 
-def _two_opt_descent_directed(tour, dist, root, max_passes=50):
-    
-    if not tour or len(tour) <= 3:
-        return list(tour), float("inf")
-
-    best = _rotate_tour_to_root(tour, root)
-    best_cost = _tour_cost_on_dist(best, dist)
-    n = len(best)
-
-    for _ in range(max_passes):
-        improved = False
-        for i in range(1, n - 2):
-            for j in range(i + 2, n + 1):
-                if i == 1 and j == n:
-                    continue
-                cand = best[:i] + list(reversed(best[i:j])) + best[j:]
-                cand = _rotate_tour_to_root(cand, root)
-                cand_cost = _tour_cost_on_dist(cand, dist)
-                if cand_cost + 1e-9 < best_cost:
-                    best, best_cost = cand, cand_cost
-                    improved = True
-                    break
-            if improved:
-                break
-        if not improved:
-            break
-
-    return best, best_cost
-
-
-# Or-opt (single-node relocation) per ATSP.
-# Sposta un nodo alla volta nella posizione che riduce il costo.
-# Non inverte segmenti: valida per grafi orientati.
 def _or_opt_descent_directed(tour, dist, root, max_passes=50):
     
     if not tour or len(tour) <= 3:
@@ -378,30 +331,6 @@ def _utsp_paper_style_local_search(tour_seed, H_decode, nodes, root, avg_dist):
     }
     return best, best_cost, info
 
-# Stampa quanto A è diversa dalla sua trasposta
-def _matrix_asymmetry_stats(A, name):
-    
-    A = np.array(A, dtype=float)
-    if A.ndim != 2 or A.shape[0] != A.shape[1]:
-        print(f"  Asimmetria {name}: matrice non quadrata, salto diagnostica.")
-        return
-
-    n = A.shape[0]
-    mask = ~np.eye(n, dtype=bool)
-    diff = A - A.T
-    abs_diff = np.abs(diff[mask])
-    abs_vals = np.abs(A[mask])
-
-    denom = float(np.mean(abs_vals)) + 1e-12
-    print(
-        f"  Asimmetria {name}: "
-        f"mean|A-A.T|={float(np.mean(abs_diff)):.6e}  "
-        f"p90={float(np.percentile(abs_diff, 90)):.6e}  "
-        f"max={float(np.max(abs_diff)):.6e}  "
-        f"rel_mean={float(np.mean(abs_diff))/denom:.6f}"
-    )
-
-
 def _build_mean_dist_from_results(results, scenario_ids, nodes):
     avg = {i: {} for i in nodes}
     for i in nodes:
@@ -500,19 +429,8 @@ def _run_ls_on_scenarios(
             H_t = H_list_precomputed[k]             # (1, n, n) tensor training/batch
             H_s = H_t.detach().squeeze(0).cpu().numpy().copy()
         else:
-            D = torch.zeros(n, n, device=device)
-            for ii, i in enumerate(nodes):
-                for jj, j in enumerate(nodes):
-                    if i != j:
-                        D[ii, jj] = float(dist_s[i][j])
-            # originale
+            D = build_dist_tensor(dist_s, nodes, device)
             adj_s = _build_adj_single(D, n, device, dist_scale, temperature)
-
-            # nuova versione alternativa, non attiva
-            # adj_s = _build_adj_robust_floor(
-            #     D.unsqueeze(0) / max(dist_scale, 1e-9),
-            #     tau=UTSP2_TEMP_SCALE, eps=0.02, q_scale=0.90, clip_max=3.0,
-            # ).squeeze(0)
             H_s = _gnn_heatmap_single(model, xy, adj_s, device)
 
         # Prima LS: se apply_penalties=False uso distanze pure.
@@ -776,63 +694,6 @@ def _aggregate_test_instances(exp_name, istanza_metrics):
         agg[f"{k}_mean"] = float(np.mean(vals)) if vals else float("nan")
         agg[f"{k}_std"] = float(np.std(vals)) if vals else float("nan")
     return agg
-
-def _run_heatmap_local_search(nodes, E, root, env, results, scenario_ids, H_list):
-    H_raw = _heatmap_numpy_from_H_list(H_list)
-    H_decode = H_raw.copy()
-
-    _matrix_asymmetry_stats(H_raw, "H_raw UTSP 2-stage")
-    _matrix_asymmetry_stats(H_decode, "H_decode UTSP 2-stage")
-
-    avg_dist = _build_mean_dist_from_results(results, scenario_ids, nodes)
-
-    print("\n  Decodifica tour da heatmap con Gurobi ...")
-    decoded = _decode_tour_gurobi(H_decode, nodes, E, root, env)
-    if isinstance(decoded, dict):
-        tour_seed = decoded.get("tour", [])
-        arcs_seed = decoded.get("arcs", [])
-        seed_cost = tour_cost(tour_seed, avg_dist) if tour_seed else None
-    else:
-        seed_cost, arcs_seed = decoded
-        tour_seed = []
-
-    if not tour_seed and arcs_seed:
-        succ = {i: j for (i, j) in arcs_seed}
-        tour_seed = [root]
-        cur = root
-        for _ in range(len(nodes)):
-            nxt = succ.get(cur)
-            if nxt is None or nxt == root:
-                break
-            tour_seed.append(nxt)
-            cur = nxt
-        seed_cost = tour_cost(tour_seed, avg_dist) if tour_seed else None
-
-    print(f"  Tour iniziale heatmap: {tour_seed}")
-    print(f"  Costo su distanza media training: {seed_cost if seed_cost is not None else 'N/A'}")
-
-    print("\n  Local search UTSP guidata da H ...")
-    tour_ls, ls_cost_avg, ls_info = _utsp_paper_style_local_search(
-        tour_seed, H_decode, nodes, root, avg_dist
-    )
-    arcs_ls = _tour_edges(tour_ls) if tour_ls else []
-
-    print(f"  Tour UTSP-LS: {tour_ls}")
-    print(f"  Costo UTSP-LS su distanza media training: {ls_cost_avg:.4f}")
-    print(f"  Info local search: {ls_info}")
-
-    return {
-        "H_raw": H_raw,
-        "H_decode": H_decode,
-        "avg_dist": avg_dist,
-        "tour_seed": tour_seed,
-        "arcs_seed": arcs_seed,
-        "seed_cost_avg": seed_cost,
-        "tour_ls": tour_ls,
-        "arcs_ls": arcs_ls,
-        "ls_cost_avg": ls_cost_avg,
-        "ls_info": ls_info,
-    }
 
 def _compute_bookings_from_tours(tours, scenario_ids, nodes, I, p, C):
     """
@@ -1104,16 +965,8 @@ def _build_heatmaps_for_scenarios(model, xy, nodes, results, scenario_ids, dist_
     if not scenario_ids:
         return []
 
-    dist_tensors = []
-    for sid in scenario_ids:
-        sd = results[sid]["scenario_dist"]
-        D = torch.zeros(n, n, device=device)
-        for ii, i_node in enumerate(nodes):
-            for jj, j_node in enumerate(nodes):
-                if i_node != j_node:
-                    D[ii, jj] = float(sd[i_node][j_node])
-        dist_tensors.append(D)
-
+    dist_tensors = [build_dist_tensor(results[sid]["scenario_dist"], nodes, device)
+                    for sid in scenario_ids]
     dist_stack = torch.stack(dist_tensors, dim=0)
     adj_stack = torch.exp(-(dist_stack / max(dist_scale, 1e-9)) / max(temperature, 1e-9))
     xy_tile = xy.unsqueeze(0).expand(len(scenario_ids), -1, -1).contiguous()
@@ -1766,12 +1619,10 @@ def _run_utsp_test_only_branch(
         )
 
         pi_test_d = _compute_exact_free_costs_from_results(results_test, scenario_ids_test)
-
-        pi_test_d = _compute_exact_free_costs_from_results(results_test, scenario_ids_test)
         PI_test = _scenario_mean(pi_test_d, scenario_ids_test, scenario_probs_test)
         pi_pren_test_d = _compute_pi_with_booking_costs_local(results_test, scenario_ids_test, I, p)
         PI_pren_test = _scenario_mean(pi_pren_test_d, scenario_ids_test, scenario_probs_test)
-         
+
 
         # Se il PI non è stato calcolato (TESI_TEST_SKIP_PI=1) ma sta nel pool,
         # lo si recupera da lì invece di rinunciarci.
@@ -1780,15 +1631,10 @@ def _run_utsp_test_only_branch(
             if pi_pool_d:
                 PI_test = _scenario_mean(pi_pool_d, scenario_ids_test, scenario_probs_test)
 
-        # NOTA: STO/EEV non sono cacheabili tra istanze o tra DIM diversi,
-        # a differenza del PI: dipendono dal blocco intero di scenari
-        # (first-stage x comune a tutto il blocco), quindi ogni istanza va
-        # risolta con Gurobi ex novo. Sono il costo dominante dello sweep.
-        # NOTA: STO/EEV sono cacheati per scenario_id esattamente come il PI
-        # (vedi _validate_policies_cached): x_sto/x_ev sono policy già fisse,
-        # quindi il costo di ogni scenario non dipende dal blocco. Una volta
-        # risolti per un dato scenario_id, restano validi per qualunque
-        # combinazione DIM/n_istanze che lo includa.
+        # NOTA: STO/EEV sono cacheati per scenario_id come il PI (vedi
+        # _validate_policies_cached): x_sto/x_ev sono policy già fisse, quindi il
+        # costo di ogni scenario non dipende dal blocco. Una volta risolti per uno
+        # scenario_id, valgono per qualunque combinazione DIM/n_istanze che lo includa.
         try:
             test_bench = _validate_policies_cached(
                 nodes, E, I, p, C, root, env,
@@ -2223,8 +2069,6 @@ def _run_local_search_branch(
     print(f"  → Salvato: {agg_path}")
 
     # NOTA: per i grafici comparativi sul campione B e per i valori scalari
-
-    # NOTA: per i grafici comparativi sul campione B e per i valori scalari
     # "piatti" restituiti sotto (retrocompatibilità con chi si aspetta un solo
     # x_test/UTSP_LS_test), uso l'ultima istanza generata. Con una sola istanza
     # (comportamento di default) coincide esattamente con prima.
@@ -2339,84 +2183,3 @@ def _run_local_search_branch(
         "istanze_test_output": istanza_outputs,  # dettaglio completo per istanza
         "aggregato_test": agg_test,          # media/std su tutte le istanze
     }
-
-def _save_utsp_ls_summary(
-    exp_name, scenario_ids, results,
-    x_ls, costs_train, tc_train, pc_train, tours_train,
-    UTSP_LS_train, UTSP_LS_val,
-    PI_train, STO_train, EEV_train,
-    PI_pren_train,
-    PI_val, STO_val, EEV_val,
-    PI_pren_val,
-    gap_ls_sto, gap_ls_eev, gap_ls_pi,
-    history, temperature,
-):
-    """
-    Riepilogo sintetico. Per compatibilità mantengo i nomi degli argomenti storici,
-    ma nel nuovo flusso `scenario_ids/costs_train` rappresentano il TEST UTSP
-    post-booking, non il training della rete.
-    """
-    def fmt(x):
-        try:
-            return f"{float(x):.4f}"
-        except Exception:
-            return "N/A" if x is None else str(x)
-
-    lines = [
-        "=" * 65,
-        "RIEPILOGO UTSP PIPELINE",
-        "=" * 65,
-        "",
-        f"Prenotazioni finali del test x_test : {sorted(x_ls)}",
-        "",
-        "TRAIN UTSP / RETE",
-        f"  PI train UTSP       = {fmt(PI_train)}",
-        f"  PI+pren train UTSP  = {fmt(PI_pren_train)}",
-        f"  UTSP train post     = {fmt(UTSP_LS_train)}",
-        "",
-        "BENCHMARK GUROBI/B ORIGINALE",
-        f"  STO train B         = {fmt(STO_train)}",
-        f"  EEV train B         = {fmt(EEV_train)}",
-        "  Nota: questi non sono calcolati sui 3000 scenari UTSP della rete.",
-        "",
-        f"TEST UTSP ({len(scenario_ids)} scenari, blocco unico)",
-        f"  {'Scen':>4} | {'PI':>10} | {'UTSP_post':>10} [perc, multa] | tour",
-    ]
-
-    for sid in scenario_ids:
-        exact = results.get(sid, {}).get("exact_free", {}) if isinstance(results.get(sid, {}), dict) else {}
-        pi = exact.get("length", exact.get("cost", None))
-        lines.append(
-            f"  {sid:>4} | {fmt(pi):>10} | {fmt(costs_train.get(sid)):>10} "
-            f"[{fmt(tc_train.get(sid))}, {fmt(pc_train.get(sid))}] | "
-            f"{tours_train.get(sid, [])}"
-        )
-
-    lines += [
-        "",
-        f"  UTSP test      = {fmt(UTSP_LS_val)}",
-        f"  PI test        = {fmt(PI_val)}",
-        f"  PI+pren test   = {fmt(PI_pren_val)}",
-        f"  STO test       = {fmt(STO_val)}",
-        f"  EEV test       = {fmt(EEV_val)}",
-        "",
-        f"  Gap UTSP test vs STO = {gap_ls_sto:+.4f}%",
-        f"  Gap UTSP test vs EEV = {gap_ls_eev:+.4f}%",
-        f"  Gap UTSP test vs PI  = {gap_ls_pi:+.4f}%",
-        "",
-        "TRAINING GNN",
-        f"  Epoche         = {UTSP2_EPOCHS}",
-        f"  Temperatura T  = {temperature:.6f}",
-        f"  Loss iniziale  = {history['loss'][0]:.5f}",
-        f"  Loss finale    = {history['loss'][-1]:.5f}",
-        f"  Loss minima    = {min(history['loss']):.5f} "
-        f"(ep {int(np.argmin(history['loss'])) + 1})",
-        "=" * 65,
-    ]
-
-    text = "\n".join(lines)
-    print("\n" + text)
-    fname = out_path(f"utsp_ls_{exp_name}.txt", "report")
-    with open(fname, "w", encoding="utf-8") as f:
-        f.write(text + "\n")
-    print(f"\n  → Salvato: {fname}")

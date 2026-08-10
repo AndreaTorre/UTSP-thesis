@@ -378,7 +378,7 @@ def generate_scenario_batches(
         used_ids, nodes, E, base_dist, I, frequent_arcs,
         n_extra_arcs, mean_frac, sigma_frac, base_seed,
         root, env, p, C,
-        solve_pi=True,
+        solve_pi=False,
         coords=coords, wind=wind,
     )
 

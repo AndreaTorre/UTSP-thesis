@@ -69,6 +69,7 @@ def parse_scenario_costs(text):
 
 # Campi del file per-istanza -> nome colonna
 FIELD_RE = {
+    "WS":      re.compile(r"WS test\s*=\s*([-\d.naN/A]+)"),
     "PI":      re.compile(r"PI test\s*=\s*([-\d.naN/A]+)"),
     "PI_pren": re.compile(r"PI\+pren test\s*=\s*([-\d.naN/A]+)"),
     "UTSP":    re.compile(r"UTSP test\s*=\s*([-\d.naN/A]+)"),
@@ -76,6 +77,7 @@ FIELD_RE = {
     "EEV":     re.compile(r"EEV test\s*=\s*([-\d.naN/A]+)"),
     "gap_sto": re.compile(r"Gap UTSP vs STO\s*=\s*([-\d.naN/A]+)%"),
     "gap_eev": re.compile(r"Gap UTSP vs EEV\s*=\s*([-\d.naN/A]+)%"),
+    "gap_ws":  re.compile(r"Gap UTSP vs WS\s*=\s*([-\d.naN/A]+)%"),
     "gap_pi":  re.compile(r"Gap UTSP vs PI\s*=\s*([-\d.naN/A]+)%"),
 }
 COMBO_RE = re.compile(
@@ -298,7 +300,7 @@ def main():
     ap.add_argument("--exp", choices=["PERT", "CVETT"], default=None)
     ap.add_argument("--nodes", type=int, default=None)
     ap.add_argument("--metric", default="gap_sto",
-                    choices=["gap_sto", "gap_eev", "gap_pi", "UTSP"])
+                    choices=["gap_ws", "gap_sto", "gap_eev", "gap_pi", "UTSP"])
     ap.add_argument("--no-pi", action="store_true",
                     help="non ricostruire il PI dalla cache")
     ap.add_argument("--out-dir", default=None,

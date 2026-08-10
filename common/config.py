@@ -60,6 +60,15 @@ TEST_SCENARIO_CACHE_DIR = os.path.join(BASE_OUTPUT_DIR, "pkl")
 WIND_NC_PATH_TRAIN = str(CVETT_DATA_DIR / "cvett_train.nc")
 WIND_NC_PATH_TEST = str(CVETT_DATA_DIR / "cvett_test.nc")
 
+WIND_NC_PATH_VAL = str(CVETT_DATA_DIR / "cvett_val.nc")
+
+# Split di valutazione della rete: "test" (default, held-out) o "val" (grid).
+# Semi/file dei due pool vivono in config, non nei comandi.
+EVAL_SPLIT = os.getenv("TESI_EVAL_SPLIT", "test").strip().lower()
+if EVAL_SPLIT not in {"test", "val"}:
+    raise ValueError(f"TESI_EVAL_SPLIT non valido: {EVAL_SPLIT}. Usa 'test' o 'val'.")
+WIND_NC_PATH_EVAL = WIND_NC_PATH_VAL if EVAL_SPLIT == "val" else WIND_NC_PATH_TEST
+
 # Alias vecchi, tenuti solo per compatibilità con codice che importa
 # ancora questi nomi (puntano entrambi al file di train).
 ERA5_NC_PATH_TRAIN = WIND_NC_PATH_TRAIN
@@ -85,6 +94,17 @@ def _prepare_run_dirs(_path):
 
 _prepare_run_dirs(OUTPUT_DIR)
 
+# ── SEMI: unica fonte, identici PERT/CVETT su ogni nodo; cambiano solo per split ──
+GLOBAL_SEED               = int(os.getenv("TESI_GLOBAL_SEED", "42"))
+CALIBRATION_SCENARIO_SEED = int(os.getenv("TESI_CALIBRATION_SCENARIO_SEED", "30"))
+FINAL_SCENARIO_SEED       = int(os.getenv("TESI_FINAL_SCENARIO_SEED", "42"))         # scenari di Experiment B
+VALIDATION_SEED           = int(os.getenv("TESI_VALIDATION_SEED", "99"))             # validazione policy B
+TRAIN_SCENARIO_SEED       = int(os.getenv("TESI_TRAIN_SCENARIO_SEED", "42"))         # split train
+TEST_SCENARIO_SEED        = int(os.getenv("TESI_TEST_SCENARIO_SEED", "1000000"))     # split test
+VAL_SCENARIO_SEED         = int(os.getenv("TESI_VAL_SCENARIO_SEED", "500000"))       # split val (rete)
+UTSP_LS_RANDOM_SEED       = int(os.getenv("TESI_UTSP_LS_RANDOM_SEED", "12345"))
+UTSP_TRAINING_SEED        = GLOBAL_SEED
+
 # ============================================================
 # Backend specifico dell'esperimento (solo iperparametri)
 # ============================================================
@@ -104,6 +124,13 @@ _backend = importlib.util.module_from_spec(_spec)
 _backend.N_NODES = N_NODES
 _backend.WIND_NC_PATH_TRAIN = WIND_NC_PATH_TRAIN
 _backend.WIND_NC_PATH_TEST = WIND_NC_PATH_TEST
+for _s in ("GLOBAL_SEED", "CALIBRATION_SCENARIO_SEED", "FINAL_SCENARIO_SEED",
+           "VALIDATION_SEED", "TRAIN_SCENARIO_SEED", "TEST_SCENARIO_SEED",
+           "VAL_SCENARIO_SEED", "UTSP_LS_RANDOM_SEED", "UTSP_TRAINING_SEED"):
+    setattr(_backend, _s, globals()[_s])
+_backend.EVAL_SPLIT = EVAL_SPLIT
+_backend.WIND_NC_PATH_VAL = WIND_NC_PATH_VAL
+_backend.WIND_NC_PATH_EVAL = WIND_NC_PATH_EVAL
 
 # TESI_DIM_ISTANZA_TEST / TESI_N_ISTANZE_TEST: dimensione e numero delle
 # istanze di test-sweep. Iniettate nel backend PRIMA di eseguirlo perché
