@@ -13,5 +13,5 @@ SIZES=${3:-"20 30 40 50 55 60 65 70"}
 
 for B in $SIZES; do
   echo "=== Sweep ${EXP} ${N} nodi — batch size ${B} ==="
-  TESI_BATCH_SWEEP=$B bash submit_exp.sh "$EXP" "$N"
+  TESI_UTSP_BATCH_SIZE=$B TESI_BATCH_SWEEP=$B bash submit_exp.sh "$EXP" "$N"
 done

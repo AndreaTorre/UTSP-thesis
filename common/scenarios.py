@@ -12,6 +12,7 @@ from config import (
 )
 from tsp_utils import canon_edge, all_undirected_edges, base_cost_undirected
 from gurobi_models import solve_exact_tsp
+from timing import timed
 from wind_perturbation import build_wind_perturbation
 
 def add_directional_wind_perturbation(result, i, j, rng, mean_frac, sigma_frac, base_dist):
@@ -317,6 +318,7 @@ def _chunk_scenario_ids(scenario_ids, batch_size, drop_last=False):
     return batches
 
 
+@timed("gen_scenari_train")
 def generate_scenario_batches(
     nodes, E, base_dist, I, frequent_arcs,
     n_extra_arcs, mean_frac, sigma_frac, base_seed,

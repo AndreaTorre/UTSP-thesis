@@ -25,6 +25,29 @@ UTSP_ROOT="${TESI_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 set -euo pipefail
 
+# ── Modalità job (opt-in) ────────────────────────────────────────────
+# SUBMIT=1 sottomette QUESTO stesso script come job SLURM (che poi gira
+# inline dentro il job) e poi esce. Default (SUBMIT non settata): esecuzione
+# inline, identica a prima. Le DIM con spazi vengono passate in sicurezza.
+#   SUBMIT=1 TESI_VARIANT=mtsp TESI_SLURM_ACCOUNT=def-tms_cpu \
+#     bash run_test_sweep.sh PERT 15 "300 100 70 60 30 20"
+if [[ "${SUBMIT:-0}" == "1" ]]; then
+  unset SUBMIT                                   # nel job: gira inline, niente loop
+  _acct=""; [[ -n "${TESI_SLURM_ACCOUNT:-}" ]] && _acct="--account=$TESI_SLURM_ACCOUNT"
+  mkdir -p "$UTSP_ROOT/logs_sweep"
+  _cmd="bash $(printf '%q ' "$UTSP_ROOT/common/run_test_sweep.sh" "$@")"
+  _jid=$(sbatch --parsable $_acct \
+    --job-name="sweep_${1:-all}_${2:-all}_${TESI_VARIANT:-single}" \
+    --time="${TIME:-08:00:00}" --cpus-per-task="${CPUS:-8}" --mem="${MEM:-16G}" \
+    --output="$UTSP_ROOT/logs_sweep/sweep_%j.out" \
+    --error="$UTSP_ROOT/logs_sweep/sweep_%j.err" \
+    --export=ALL,TESI_ROOT_DIR="$UTSP_ROOT" \
+    --wrap="$_cmd")
+  echo "Sweep sottomesso come job $_jid (gira inline nel job)."
+  echo "  log: $UTSP_ROOT/logs_sweep/sweep_${_jid}.out   |   squeue -u \$USER"
+  exit 0
+fi
+
 module load python
 module load gurobi/13.0.0
 unset GRB_WLSACCESSID

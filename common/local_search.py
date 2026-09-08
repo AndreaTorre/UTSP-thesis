@@ -22,6 +22,7 @@ import random
 import pickle
 import hashlib
 from common import out_path
+from timing import timed, ls_add
 import numpy as np
 import torch
 
@@ -36,6 +37,9 @@ from config import (
 )
 from tsp_utils import get_edge_value, canon_edge
 from gurobi_models import solve_exact_tsp, solve_reservation_tsp
+import os as _os_bench
+_BENCH_MIP_GAP = float(_os_bench.getenv('TESI_BENCH_MIP_GAP')) if _os_bench.getenv('TESI_BENCH_MIP_GAP') else None
+_BENCH_TIME_LIMIT = float(_os_bench.getenv('TESI_BENCH_TIME_LIMIT')) if _os_bench.getenv('TESI_BENCH_TIME_LIMIT') else None
 from scenarios import generate_scenarios
 from evaluation import (
     validate_policies, genera_grafici_utsp, plot_cost_distributions,
@@ -479,6 +483,7 @@ def _run_ls_on_scenarios(
               f"tot={costs[sid]:.4f}  t={elapsed_sid:.2f}s  tour={tour_s}")
 
     elapsed_ls = time.time() - t0_ls
+    ls_add(label, elapsed_ls)
     n_scen = len(scenario_ids)
     print(f"  [{label}] Local search completata: {n_scen} scenari in "
           f"{elapsed_ls:.2f}s  ({elapsed_ls/n_scen:.2f}s/scenario)")
@@ -1119,6 +1124,7 @@ def _pool_costs_by_model(scenario_ids, model):
     return out
 
 
+@timed("bench_gurobi")
 def _validate_policies_cached(
     nodes, E, I, p, C, root, env,
     x_sto, x_ev, results_by_sid, scenario_ids,
@@ -1179,11 +1185,13 @@ def _validate_policies_cached(
                 nodes, E, I, sd, root, p, C, env,
                 fixed_reservations=list(x_sto), output_flag=0,
                 model_name=f"val_sto_{sid}",
+                time_limit=_BENCH_TIME_LIMIT, mip_gap=_BENCH_MIP_GAP,
             )
             r_ev = solve_reservation_tsp(
                 nodes, E, I, sd, root, p, C, env,
                 fixed_reservations=list(x_ev), output_flag=0,
                 model_name=f"val_ev_{sid}",
+                time_limit=_BENCH_TIME_LIMIT, mip_gap=_BENCH_MIP_GAP,
             )
             sto_tc = r_sto["tour_cost"] if r_sto["tour_cost"] is not None else 0.0
             sto_pc = r_sto["penalty_paid"] if r_sto["penalty_paid"] is not None else 0.0
@@ -1216,6 +1224,7 @@ def _validate_policies_cached(
             r_ws = solve_reservation_tsp(
                 nodes, E, I, results_by_sid[sid]["scenario_dist"], root, p, C, env,
                 fixed_reservations=None, output_flag=0, model_name=f"val_ws_{sid}",
+                time_limit=_BENCH_TIME_LIMIT, mip_gap=_BENCH_MIP_GAP,
             )
             cache.setdefault(sid, {})["ws_cost"] = r_ws["total_cost"]
         _save_sto_eev_cache(state_key, cache)
@@ -1235,6 +1244,7 @@ def _validate_policies_cached(
             "ws_costs": {sid: cache[sid].get("ws_cost") for sid in scenario_ids}}
 
 
+@timed("gen_scenari_test")
 def generate_test_scenario_blocks(
     nodes, E, base_dist, I, frequent_arcs, root, env, p, C,
     scenario_ids, scenario_kwargs,

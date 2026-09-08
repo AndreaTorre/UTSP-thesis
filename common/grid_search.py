@@ -27,6 +27,7 @@ e' piu' semplice e isola i crash.
 """
 
 import argparse
+import shutil 
 import csv
 import itertools
 import json
@@ -126,8 +127,13 @@ def run_one(idx, exp, nodes, batch):
         os.makedirs(os.path.join(cdir, sub), exist_ok=True)
 
     # --- environment: DEVE essere completo prima di importare config ---
-    os.environ["TESI_EXPERIMENT"] = exp
+        os.environ["TESI_EXPERIMENT"] = exp
     os.environ["TESI_N_NODES"] = str(nodes)
+    # Il backend legge TESI_UTSP_BATCH_SIZE all'import e lì valida la divisibilità
+    # dei batch. TESI_BATCH_SWEEP viene applicato DOPO l'import (common/config.py),
+    # troppo tardi per quel controllo: senza questa riga ogni combo CVETT muore
+    # all'import con "Test non divisibile in batch completi".
+    os.environ["TESI_UTSP_BATCH_SIZE"] = str(batch)
     os.environ["TESI_BATCH_SWEEP"] = str(batch)
     os.environ["TESI_OUTPUT_OVERRIDE"] = cdir
     for name, value in combo["params"].items():
@@ -184,10 +190,28 @@ def run_one(idx, exp, nodes, batch):
         record["status"] = "failed"
         record["error"] = f"{type(exc).__name__}: {exc}"
         record["traceback"] = traceback.format_exc()
-
     record["seconds"] = round(time.time() - t0, 1)
     with open(os.path.join(cdir, "result.json"), "w", encoding="utf-8") as f:
         json.dump(record, f, indent=2, default=str)
+
+    # NOTA: la grid legge SOLO result.json (collect + grid_analyze). Il resto
+    # (modello/ grafici/ report/ checkpoint/ pkl/) è zavorra: 486 × artefatti
+    # saturano la quota inode di $HOME. Lo elimino tenendo solo result.json.
+    # try/except: se la pulizia fallisce NON deve far fallire una combo già
+    # riuscita — al massimo resta zavorra, come prima della patch.
+    if os.getenv("TESI_GRID_KEEP_OUTPUT") != "1":
+        try:
+            for entry in os.listdir(cdir):
+                if entry == "result.json":
+                    continue
+                path = os.path.join(cdir, entry)
+                if os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    os.remove(path)
+        except OSError as e:
+            print(f"[combo {idx:04d}] pulizia saltata: {e}")
+
     print(f"[combo {idx:04d}] {record['status']} in {record['seconds']}s -> {cdir}")
     return 0 if record["status"] == "ok" else 1
 

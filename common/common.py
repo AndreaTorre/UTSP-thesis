@@ -95,3 +95,14 @@ def load_data():
     E = [(i, j) for i in nodes for j in nodes if i != j]
     root = nodes[0]
     return nodes, coords, base_dist, E, root
+    
+
+import time, json, os
+_PHASE_TIMES = {}
+class phase:
+    def __init__(self, name): self.name = name
+    def __enter__(self): self.t = time.time(); return self
+    def __exit__(self, *a): _PHASE_TIMES[self.name] = _PHASE_TIMES.get(self.name, 0.0) + (time.time() - self.t)
+def dump_phase_times(path):
+    with open(path, "w") as f: json.dump(_PHASE_TIMES, f, indent=2)
+    _PHASE_TIMES.clear()

@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from timing import timed, timing_dump
 
 # NOTA: ripulito. I parametri UTSP_LS_* e TEST_SCENARIO_* sono usati da
 # local_search.py, non qui. UTSP2_ALPHA_LOSS/ALPHA_DECODE non erano usati da
@@ -372,6 +373,19 @@ def _save_utsp_train_artifact(
 
 
 def _assert_utsp_artifact_compatible(metadata, nodes, I, p, C):
+    if metadata.get("multigraph"):
+        # checkpoint multi-grafo: nessun (nodes, I) unico. Basta N + iperparametri rete.
+        errs = []
+        if int(metadata.get("n_nodes", -1)) != len(nodes):
+            errs.append(f"n_nodes salvato={metadata.get('n_nodes')} corrente={len(nodes)}")
+        if int(metadata.get("utsp2_hidden", -1)) != int(UTSP2_HIDDEN):
+            errs.append("UTSP2_HIDDEN diverso")
+        if int(metadata.get("utsp2_nlayers", -1)) != int(UTSP2_NLAYERS):
+            errs.append("UTSP2_NLAYERS diverso")
+        if errs:
+            raise ValueError("Artefatto UTSP (multigraph) incompatibile:\n  - " + "\n  - ".join(errs))
+        return
+
     errors = []
 
     if int(metadata.get("n_nodes", -1)) != len(nodes):
@@ -423,8 +437,14 @@ def _load_utsp_train_artifact(exp_name, nodes, coords, I, p, C, device):
         history["loss"] = [float("nan")]
 
     xy = _normalize_coords(nodes, coords, device)
-    temperature = float(metadata["temperature"])
-    dist_scale = float(metadata["dist_scale"])
+    if metadata.get("multigraph"):
+        # metadata multi-grafo non ha una τ/scale uniche: le ricalcola il chiamante
+        # dal GRAFO DI TEST (ramo REUSE). Qui placeholder, mai usati nei calcoli.
+        temperature = float("nan")
+        dist_scale = float("nan")
+    else:
+        temperature = float(metadata["temperature"])
+        dist_scale = float(metadata["dist_scale"])
 
     print("\n  Artefatto training UTSP caricato:")
     print(f"    model       = {paths['model']}")
@@ -437,6 +457,85 @@ def _load_utsp_train_artifact(exp_name, nodes, coords, I, p, C, device):
 
 
 # Addestro la GNN su batch di scenari
+def _optimize_units(model, units, optimizer, scheduler, device, n_epochs,
+                    *, shuffle_seed=None, log_cross=True):
+    """Loop di ottimizzazione condiviso per 1..n istanze.
+
+    Un'unità = un batch legato alle SUE maschere/normalizzazione:
+      {xy, adj, dist, I_mask, p_mat, C_mat, probs, K}.
+    - single-graph: le unità sono i batch di un solo grafo, con maschere globali
+      condivise e shuffle_seed=None (ordine invariato) -> identico a prima.
+    - multigraph: ogni unità è un grafo diverso, shuffle_seed!=None mescola l'ordine.
+    Ritorna (history, best_state, best_loss). Il pre (tensori/model/opt) e il post
+    (diagnostiche/return) restano ai chiamanti.
+    """
+    history = {"loss": [], "components": []}
+    if log_cross:
+        history["cross_share"] = []
+    best_loss, best_state = float("inf"), None
+    n_units = len(units)
+
+    for epoch in range(1, n_epochs + 1):
+        model.train()
+        if shuffle_seed is None:
+            order = range(n_units)
+        else:
+            order = np.random.default_rng(int(shuffle_seed) + 10_000 + epoch).permutation(n_units)
+
+        epoch_loss = 0.0
+        epoch_comps = None
+        cross = None
+        for gi in order:
+            u = units[int(gi)]
+            K_b = u["K"]
+            T_batch = model(u["xy"], u["adj"], device)            # (K_b, n, n)
+            T_list    = [T_batch[k:k+1] for k in range(K_b)]
+            dist_list = [u["dist"][k:k+1] for k in range(K_b)]
+
+            loss, comps = two_stage_utsp_loss(
+                T_list, dist_list, u["I_mask"], u["p_mat"], u["C_mat"], u["probs"],
+                alpha=UTSP2_ALPHA_LOSS, lambda1=UTSP2_LAMBDA1, lambda2=UTSP2_LAMBDA2,
+                lambda_e=UTSP2_LAMBDA_E, lambda_b_div=UTSP2_LAMBDA_B_DIV, lambda_d=UTSP2_LAMBDA_D,
+                include_penalty=UTSP2_INCLUDE_PENALTY,
+                include_entropy=UTSP2_INCLUDE_ENTROPY,
+                return_components=True,
+            )
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+            epoch_loss += loss.item()
+            epoch_comps = comps       # ultima unità come riferimento
+
+        scheduler.step()
+
+        avg_loss = epoch_loss / n_units
+        history["loss"].append(avg_loss)
+        history["components"].append(epoch_comps)
+        if log_cross:
+            cross = _cross_share(model)               # dall'ultima unità dell'epoca
+            history["cross_share"].append(cross)
+
+        if avg_loss < best_loss:
+            best_loss  = avg_loss
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+
+        if epoch % UTSP2_LOG_FREQ == 0 or epoch == 1:
+            marker = " ★" if abs(avg_loss - best_loss) < 1e-9 else ""
+            if log_cross:
+                cs = " ".join(f"L{i}={v:.2f}" for i, v in enumerate(cross))
+                print(f"  {format_loss_components(epoch_comps, epoch)} "
+                      f"avg={avg_loss:.5f}{marker} | cross {cs}")
+            else:
+                print(f"  {format_loss_components(epoch_comps, epoch)} "
+                      f"avg={avg_loss:.5f}{marker}")
+
+    return history, best_state, best_loss
+
+
+@timed("training")
 def _train_utsp_2stage(
     nodes, coords, scenario_ids, results, scenario_probs,
     I_mask, p_mat, C_mat, device,
@@ -505,60 +604,22 @@ def _train_utsp_2stage(
     print(f"  Epoche={UTSP2_EPOCHS}  lr={UTSP2_LR}  "
           f"λ1={UTSP2_LAMBDA1}  λ2={UTSP2_LAMBDA2}  λe={UTSP2_LAMBDA_E}  ")
 
-    history = {"loss": [], "components": []}
-    best_loss, best_state = float("inf"), None
+    # Un batch = un'unita' del loop condiviso: maschere globali, tensori affettati una
+    # volta sola (xy/adj/dist non cambiano in training). n=1 grafo => nessuno shuffle,
+    # quindi il percorso single-graph resta identico a prima.
+    units = [{
+        "xy":   xy_tile[bs["indices"]],
+        "adj":  adj_stack[bs["indices"]],
+        "dist": dist_model[bs["indices"]],
+        "I_mask": I_mask, "p_mat": p_mat, "C_mat": C_mat,
+        "probs": bs["probs_t"], "K": bs["K"],
+    } for bs in batch_slices]
+
     t0 = time.time()
-
-    for epoch in range(1, UTSP2_EPOCHS + 1):
-        model.train()
-        epoch_loss = 0.0
-        epoch_comps = None
-
-        for bs in batch_slices:
-            idx = bs["indices"]
-            K_b = bs["K"]
-            xy_b   = xy_tile[idx]       # (K_b, n, 2)
-            adj_b  = adj_stack[idx]     # (K_b, n, n)
-            dist_b = dist_model[idx]    # (K_b, n, n)
-
-            T_batch = model(xy_b, adj_b, device)                  # (K_b, n, n)
-            T_list    = [T_batch[k:k+1] for k in range(K_b)]
-            dist_list = [dist_b[k:k+1]  for k in range(K_b)]
-
-            loss, comps = two_stage_utsp_loss(
-                T_list, dist_list, I_mask, p_mat, C_mat, bs["probs_t"],
-                alpha=UTSP2_ALPHA_LOSS, lambda1=UTSP2_LAMBDA1, lambda2=UTSP2_LAMBDA2,
-                lambda_e=UTSP2_LAMBDA_E,lambda_b_div=UTSP2_LAMBDA_B_DIV, lambda_d=UTSP2_LAMBDA_D,
-                include_penalty=UTSP2_INCLUDE_PENALTY,
-                include_entropy=UTSP2_INCLUDE_ENTROPY,
-                return_components=True,
-            )
-
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-
-            epoch_loss += loss.item()
-            epoch_comps = comps       # ultimo batch come riferimento
-
-        scheduler.step()
-
-        avg_loss = epoch_loss / n_batches
-        history["loss"].append(avg_loss)
-        history["components"].append(epoch_comps)   # NOTA: era appeso due volte (history disallineata per epoca)
-        cross = _cross_share(model)                 # dall'ultimo batch dell'epoca
-        history.setdefault("cross_share", []).append(cross)
-        
-        if avg_loss < best_loss:
-            best_loss  = avg_loss
-            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-
-        if epoch % UTSP2_LOG_FREQ == 0 or epoch == 1:
-            marker = " ★" if abs(avg_loss - best_loss) < 1e-9 else ""
-            cs = " ".join(f"L{i}={v:.2f}" for i, v in enumerate(cross))
-            print(f"  {format_loss_components(epoch_comps, epoch)} "
-                  f"avg={avg_loss:.5f}{marker} | cross {cs}")
+    history, best_state, best_loss = _optimize_units(
+        model, units, optimizer, scheduler, device, UTSP2_EPOCHS,
+        shuffle_seed=None, log_cross=True,
+    )
 
     elapsed = time.time() - t0
     print(f"\n{'═'*65}")
@@ -773,6 +834,18 @@ def run_esperimento_B_UTSP(
         model, history, xy_single, temperature, dist_scale, train_metadata = _load_utsp_train_artifact(
             exp_name, nodes, coords, I, p, C, device
         )
+        if train_metadata.get("multigraph"):
+            # normalizzazione dal GRAFO DI TEST (il checkpoint multi-grafo non porta τ/scale uniche)
+            _bt = generate_scenario_batches(
+                nodes, E, base_dist, I, frequent_arcs,
+                N_EXTRA_ARCS, MEAN_FRAC, SIGMA_FRAC, UTSP_TRAINING_SEED,
+                root, env, p, C,
+                n_scenarios=UTSP_BATCH_SIZE, batch_size=UTSP_BATCH_SIZE,
+                drop_last=False, **scenario_kwargs_train,
+            )[0]
+            xy_single, _, _, dist_scale, temperature = _build_input_tensors(
+                _bt["scenario_ids"], _bt["results"], nodes, coords, device
+            )
         ls_out = _run_utsp_test_only_branch(
             nodes=nodes,
             coords=coords,
@@ -790,6 +863,7 @@ def run_esperimento_B_UTSP(
             exp_name=exp_name,
             history=history,
         )
+        timing_dump()
         return {
             "model": model,
             "history": history,
@@ -882,9 +956,12 @@ def run_esperimento_B_UTSP(
             )
 
             # Ricostruisco tensori train solo per diagnostiche/plot del flusso completo.
-            xy_tile, _, dist_model, _, _ = _build_input_tensors(
+            xy_tile, _, dist_model, dist_scale_ts, temperature_ts = _build_input_tensors(
                 scenario_ids_utsp, results_utsp, nodes, coords, device
             )
+            if train_metadata.get("multigraph"):
+                # normalizzazione del GRAFO DI TEST (τ ~ mediana dell'istanza), non del training
+                temperature, dist_scale = temperature_ts, dist_scale_ts
             adj_stack = torch.exp(-dist_model / max(float(temperature), 1e-9))
             probs_t = torch.tensor(
                 [scenario_probs_utsp[sid] for sid in scenario_ids_utsp],
@@ -1012,4 +1089,5 @@ def run_esperimento_B_UTSP(
     
     output.update({"local_search": ls_out})
 
+    timing_dump()
     return output

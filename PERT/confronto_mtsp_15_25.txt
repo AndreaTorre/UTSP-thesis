@@ -1,0 +1,27 @@
+CONFRONTO single-TSP  vs  multigraph (mtsp) — exp=PERT
+
+STO/EEV/PI sono baseline identiche; il confronto è sul solo UTSP.
+
+
+======================================================================
+N = 15
+======================================================================
+  Istanze: single=800  mtsp=100   (baseline STO/EEV/PI identiche: 1826.5989/1867.5641/1647.2696)
+
+  metrica                   single-TSP          mtsp   Δ (mtsp-single)
+  ------------------------------------------------------------------
+  UTSP costo medio           1845.6659     1842.9135           -2.7524
+  gap UTSP vs STO %               1.04          0.89             -0.15
+  gap UTSP vs EEV %              -1.17         -1.32             -0.15
+  gap UTSP vs PI %               12.05         11.88             -0.17
+
+  Confronto appaiato UTSP (2000 scenari comuni):
+    differenza media di costo (mtsp-single) = -3.3741  (mediana 0.0000)
+    mtsp migliore in 532 scenari, single in 425, pari 1043  (26.6% a favore di mtsp)
+    → mtsp meglio (costo minore)
+
+======================================================================
+N = 25
+======================================================================
+  [!] nessun report mtsp trovato (variant=mtsp).
+  Confronto impossibile: manca una delle due run.
