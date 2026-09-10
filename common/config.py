@@ -238,6 +238,13 @@ if _override:
     OUTPUT_DIR = TRAIN_OUTPUT_DIR = os.path.abspath(_override)
     _prepare_run_dirs(OUTPUT_DIR)
 
+# Override esplicito della cache scenari/res_B (probe: la puntiamo altrove
+# per NON toccare RISULTATI_N/pkl vera). Vince su tutto il resto.
+_cache_override = os.getenv("TESI_CACHE_DIR_OVERRIDE")
+if _cache_override:
+    TEST_SCENARIO_CACHE_DIR = os.path.abspath(_cache_override)
+    os.makedirs(TEST_SCENARIO_CACHE_DIR, exist_ok=True)
+
 # Alcuni script lanciano sotto-processi che devono ereditare l'OUTPUT_DIR
 # risolto qui, batch sweep e override inclusi.
 os.environ["TESI_OUTPUT_DIR"] = OUTPUT_DIR

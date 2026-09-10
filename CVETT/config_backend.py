@@ -390,7 +390,7 @@ UTSP_LS_APPLY_INITIAL_2OPT = _env_bool(
 # PARAMETRI DRONE / MODELLO ENERGETICO
 # ============================================================
 
-DRONE_U  = 12.0          # ground speed nominale [m/s]
+DRONE_U  = _env_float("TESI_DRONE_U", 12.0)   # ground speed nominale [m/s] (override: TESI_DRONE_U)
 DRONE_A0 = 168.49        # W
 DRONE_A2 = 1.66375e-2    # W s^2 m^-2
 DRONE_A3 = 9.242625e-3   # W s^3 m^-3

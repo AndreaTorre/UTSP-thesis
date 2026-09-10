@@ -106,8 +106,10 @@ def build_wind_perturbation(
     base_dist,
     coords,
     wind,
-    n_samples=5,
+    n_samples=None,
     eps=1e-6,
+    samples_per_cell=2,
+    n_samples_min=5,
 ):
     """
     Costo wind-adjusted basato sul modello energetico (paper droni_vento.pdf):
@@ -144,8 +146,10 @@ def build_wind_perturbation(
     v_field = wind["v100"][t_idx]
     geo = _make_geo_coords(nodes, coords, n_lat, n_lon)
 
-    sample_fracs = [(k + 0.5) / n_samples for k in range(n_samples)]
     P_u = _power(DRONE_U)
+    _fixed_fracs = None
+    if n_samples is not None:
+        _fixed_fracs = [(k + 0.5) / n_samples for k in range(n_samples)]
 
     pert = {}
     for i in nodes:
@@ -165,8 +169,15 @@ def build_wind_perturbation(
             tau_x, tau_y = dx / length, -dy / length  # direzione arco: est, nord
 
             lat_j, lon_j = geo[j]
+            if _fixed_fracs is not None:
+                fracs = _fixed_fracs
+            else:
+                # celle di griglia ERA5 attraversate dall'arco
+                n_cells = math.hypot(lat_j - lat_i, lon_j - lon_i)
+                m = max(n_samples_min, int(math.ceil(samples_per_cell * n_cells)))
+                fracs = [(k + 0.5) / m for k in range(m)]
             P_sum = 0.0
-            for frac in sample_fracs:
+            for frac in fracs:
                 lat_s = lat_i + frac * (lat_j - lat_i)
                 lon_s = lon_i + frac * (lon_j - lon_i)
                 u_w = _bilinear(u_field, lat_s, lon_s)
@@ -178,7 +189,7 @@ def build_wind_perturbation(
                 v_a = math.sqrt((DRONE_U - w_par) ** 2 + max(w_perp_sq, 0.0))
                 P_sum += _power(v_a)
 
-            m_ij = (P_sum / n_samples) / P_u
+            m_ij = (P_sum / len(fracs)) / P_u
             pert[(i, j)] = L_ij * (m_ij - 1.0)  # delta = c_ij - d_ij
 
     return pert

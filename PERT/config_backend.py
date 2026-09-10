@@ -40,6 +40,13 @@ else:
         f"Aggiungi un blocco elif N_NODES == {N_NODES}."
     )
 
+# Override da env di STO_TIME_LIMIT / STO_MIP_GAP (probe e run a 40 nodi:
+# tarati sulla curva gap-tempo, non a naso). Default = valori per-taglia sopra.
+if os.environ.get("TESI_STO_TIME_LIMIT"):
+    STO_TIME_LIMIT = float(os.environ["TESI_STO_TIME_LIMIT"])
+if os.environ.get("TESI_STO_MIP_GAP"):
+    STO_MIP_GAP = float(os.environ["TESI_STO_MIP_GAP"])
+
 # ── Parametri generali ────────────────────────────────────────────
 
 N_TRAINING_SCENARIOS = 8
