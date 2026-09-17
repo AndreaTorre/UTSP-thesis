@@ -52,9 +52,10 @@ from evaluation import (
 from wind_perturbation import load_wind_field   # <<< unico import aggiuntivo rispetto a PERT
 
 # ── Percorsi ─────────────────────────────────────────────────────
-from config import OUTPUT_DIR, INSTANCE_TAG
+from config import OUTPUT_DIR, INSTANCE_TAG, TEST_SCENARIO_CACHE_DIR
 
-PKL_DIR      = os.path.join(OUTPUT_DIR, "pkl")
+# PKL_DIR dalla dir cache di config (unica fonte, tag modello di costo incluso)
+PKL_DIR      = TEST_SCENARIO_CACHE_DIR
 PARALLEL_DIR = os.path.join(PKL_DIR, "parallel_data")
 CACHE_PATH   = os.path.join(PKL_DIR, "res_B_cached.pkl")
 

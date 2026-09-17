@@ -36,7 +36,7 @@ from config import (
     UTSP_LS_APPLY_INITIAL_2OPT, DIM_ISTANZA_TEST, N_ISTANZE_TEST,
 )
 from tsp_utils import get_edge_value, canon_edge
-from gurobi_models import solve_exact_tsp, solve_reservation_tsp
+from gurobi_models import solve_exact_tsp, solve_reservation_tsp, solve_stochastic
 import os as _os_bench
 _BENCH_MIP_GAP = float(_os_bench.getenv('TESI_BENCH_MIP_GAP')) if _os_bench.getenv('TESI_BENCH_MIP_GAP') else None
 _BENCH_TIME_LIMIT = float(_os_bench.getenv('TESI_BENCH_TIME_LIMIT')) if _os_bench.getenv('TESI_BENCH_TIME_LIMIT') else None
@@ -1244,6 +1244,63 @@ def _validate_policies_cached(
             "ws_costs": {sid: cache[sid].get("ws_cost") for sid in scenario_ids}}
 
 
+def _validate_policies_resolved(
+    nodes, E, I, p, C, root, env, base_dist,
+    results_by_sid, scenario_ids, scenario_probs, idx=None,
+):
+    """
+    STRADA A: STO/EEV RI-RISOLTI per-istanza sul blocco di test, con le
+    STESSE chiamate di run_esperimento_B_wind - solve_stochastic (x_sto
+    decisa sul blocco), compute_eev_medione (x_ev sul medione) e WS
+    per-scenario a informazione perfetta. Nessuna policy congelata: quindi
+    WS <= STO <= EEV vale per costruzione sul blocco.
+
+    Serve a verificare end-to-end che i modelli Gurobi girino corretti sui
+    dati di test (non un solver saltato, come nel percorso a policy congelate).
+    Attivata da TESI_TEST_RESOLVE_PER_INSTANCE=1.
+
+    # NOTA: ri-risolve a ogni run (nessuna cache): dipende dal blocco intero,
+    # quindi non e' cacheabile per scenario_id come il percorso congelato. Un
+    # blocco per istanza: accettabile sui test. Se diventa collo di bottiglia
+    # si aggiunge una cache indicizzata sull'insieme di scenari del blocco.
+    """
+    from evaluation import compute_eev_medione  # locale: evita import circolare
+    tag = f"[istanza {idx}] " if idx is not None else ""
+    probs = scenario_probs or {sid: 1.0 / len(scenario_ids) for sid in scenario_ids}
+
+    # STO: two-stage congiunto sul blocco (x_sto decisa qui, non congelata)
+    scenario_deltas = {sid: results_by_sid[sid]["pert"] for sid in scenario_ids}
+    res_sto = solve_stochastic(
+        nodes, E, I, base_dist, root, p, C, env,
+        scenario_deltas, probs, force_important=False)
+    STO_val = res_sto["objective"]
+    x_sto = {tuple(sorted(e)) for e in res_sto["x_used"]}
+    sto_costs = {sid: res_sto["scenario_solutions"][sid]["total_cost"]
+                 for sid in scenario_ids}
+
+    # EEV: prenotazione sul medione valutata sul blocco (stessa fn del train)
+    (_tm, _am, x_ev, eev_costs, _etc, _epc, EEV_val, _PI) = compute_eev_medione(
+        nodes, E, root, env, base_dist, I, p, C, results_by_sid, scenario_ids)
+    x_ev = {tuple(sorted(e)) for e in x_ev}
+
+    # WS: wait-and-see per-scenario, x libera -> bound informazione perfetta
+    ws_costs = {}
+    for sid in scenario_ids:
+        r_ws = solve_reservation_tsp(
+            nodes, E, I, results_by_sid[sid]["scenario_dist"], root, p, C, env,
+            fixed_reservations=None, output_flag=0, model_name=f"ws_res_{sid}",
+            time_limit=_BENCH_TIME_LIMIT, mip_gap=_BENCH_MIP_GAP)
+        ws_costs[sid] = r_ws["total_cost"]
+    WS_val = sum(probs[sid] * ws_costs[sid] for sid in scenario_ids)
+
+    flip = "x_sto != x_ev" if x_sto != x_ev else "x_sto == x_ev"
+    print(f"  {tag}STRADA A (ri-risolto): WS={WS_val:.4f} STO={STO_val:.4f} "
+          f"EEV={EEV_val:.4f} | VSS={EEV_val - STO_val:+.4f} | {flip}")
+    return {"WS_val": WS_val, "STO_val": STO_val, "EEV_val": EEV_val,
+            "sto_costs": sto_costs, "eev_costs": eev_costs, "ws_costs": ws_costs,
+            "x_sto_block": sorted(x_sto), "x_ev_block": sorted(x_ev)}
+
+
 @timed("gen_scenari_test")
 def generate_test_scenario_blocks(
     nodes, E, base_dist, I, frequent_arcs, root, env, p, C,
@@ -1645,15 +1702,23 @@ def _run_utsp_test_only_branch(
         # _validate_policies_cached): x_sto/x_ev sono policy già fisse, quindi il
         # costo di ogni scenario non dipende dal blocco. Una volta risolti per uno
         # scenario_id, valgono per qualunque combinazione DIM/n_istanze che lo includa.
+        # Con TESI_TEST_RESOLVE_PER_INSTANCE=1 si passa a Strada A: STO/EEV
+        # ri-risolti sul blocco (WS<=STO<=EEV per costruzione, niente policy congelate).
         try:
-            test_bench = _validate_policies_cached(
-                nodes, E, I, p, C, root, env,
-                res_B["x_used_sto"], res_B["x_ev"],
-                results_test, scenario_ids_test,
-                base_seed=TEST_SCENARIO_SEED,
-                frequent_arcs=frequent_arcs,
-                scenario_kwargs=scenario_kwargs,
-            )
+            if os.environ.get("TESI_TEST_RESOLVE_PER_INSTANCE"):
+                test_bench = _validate_policies_resolved(
+                    nodes, E, I, p, C, root, env, base_dist,
+                    results_test, scenario_ids_test, scenario_probs_test, idx=idx,
+                )
+            else:
+                test_bench = _validate_policies_cached(
+                    nodes, E, I, p, C, root, env,
+                    res_B["x_used_sto"], res_B["x_ev"],
+                    results_test, scenario_ids_test,
+                    base_seed=TEST_SCENARIO_SEED,
+                    frequent_arcs=frequent_arcs,
+                    scenario_kwargs=scenario_kwargs,
+                )
             WS_test = test_bench.get("WS_val", float("nan"))
             STO_test = test_bench.get("STO_val", float("nan"))
             EEV_test = test_bench.get("EEV_val", float("nan"))

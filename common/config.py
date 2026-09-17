@@ -1,5 +1,6 @@
 import os
 import importlib.util
+import hashlib
 from pathlib import Path
 
 # ============================================================
@@ -248,3 +249,18 @@ if _cache_override:
 # Alcuni script lanciano sotto-processi che devono ereditare l'OUTPUT_DIR
 # risolto qui, batch sweep e override inclusi.
 os.environ["TESI_OUTPUT_DIR"] = OUTPUT_DIR
+
+# Isolamento cache per MODELLO DI COSTO (solo esperimenti a vento).
+# Le perturbazioni (res_B, cache scenari, STO/EEV, pool) dipendono dai
+# parametri vento->costo, che NON entrano nel fingerprint della cache:
+# senza questo tag uno sweep su DRONE_U riuserebbe le stesse cache.
+# Va calcolato DOPO gli override TESI_P_*. Per PERT: tag vuoto, invariato.
+COST_MODEL_TAG = ""
+if EXPERIMENT == "CVETT":
+    _cm = [globals().get(_k) for _k in (
+        "DRONE_U", "DRONE_A0", "DRONE_A2", "DRONE_A3",
+        "WIND_SAMPLES_PER_CELL", "WIND_SAMPLES_MIN", "WIND_SAMPLES_MAX")]
+    _cm_hash = hashlib.md5(repr(_cm).encode()).hexdigest()[:8]
+    COST_MODEL_TAG = f"U{globals().get('DRONE_U')}_{_cm_hash}"
+    TEST_SCENARIO_CACHE_DIR = os.path.join(TEST_SCENARIO_CACHE_DIR, COST_MODEL_TAG)
+    os.makedirs(TEST_SCENARIO_CACHE_DIR, exist_ok=True)

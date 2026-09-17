@@ -19,9 +19,11 @@ import h5py
 # PERT questo modulo viene importato da scenarios.py ma non usato: import
 # protetto per non far esplodere la pipeline PERT.
 try:
-    from config import DRONE_U, DRONE_A0, DRONE_A2, DRONE_A3
+    from config import (DRONE_U, DRONE_A0, DRONE_A2, DRONE_A3,
+                        WIND_SAMPLES_PER_CELL, WIND_SAMPLES_MIN, WIND_SAMPLES_MAX)
 except ImportError:
     DRONE_U = DRONE_A0 = DRONE_A2 = DRONE_A3 = None
+    WIND_SAMPLES_PER_CELL, WIND_SAMPLES_MIN, WIND_SAMPLES_MAX = 4.0, 2, 400
 
 # ---------------------------------------------------------------------------
 # CARICAMENTO
@@ -108,8 +110,6 @@ def build_wind_perturbation(
     wind,
     n_samples=None,
     eps=1e-6,
-    samples_per_cell=2,
-    n_samples_min=5,
 ):
     """
     Costo wind-adjusted basato sul modello energetico (paper droni_vento.pdf):
@@ -174,7 +174,8 @@ def build_wind_perturbation(
             else:
                 # celle di griglia ERA5 attraversate dall'arco
                 n_cells = math.hypot(lat_j - lat_i, lon_j - lon_i)
-                m = max(n_samples_min, int(math.ceil(samples_per_cell * n_cells)))
+                m = int(math.ceil(WIND_SAMPLES_PER_CELL * n_cells))
+                m = min(max(m, WIND_SAMPLES_MIN), WIND_SAMPLES_MAX)
                 fracs = [(k + 0.5) / m for k in range(m)]
             P_sum = 0.0
             for frac in fracs:

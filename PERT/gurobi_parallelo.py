@@ -187,22 +187,31 @@ def fase_pi():
 
         pi_results = {}   # TSP libero: SOLO per archi frequenti / regola f^PI (non un bound)
         ws_results = {}   # WS (wait-and-see): bound di informazione perfetta
+        # A n grandi il WS esatto non e' fattibile: gap/tempo dichiarati (cfr. cap.5).
+        ws_gap  = float(os.getenv("TESI_WS_MIP_GAP", "0.0"))
+        _tl     = os.getenv("TESI_WS_TIME_LIMIT")
+        ws_tl   = float(_tl) if _tl else None
+        skip_pi = os.getenv("TESI_SKIP_PI", "0") == "1"
+        print(f"  WS: mip_gap={ws_gap}  time_limit={ws_tl}  skip_PI={skip_pi}")
         for idx, sid in enumerate(scenario_ids):
             print(f"  scenario {sid} ({idx+1}/{len(scenario_ids)})...", end=" ")
             t_s = time.time()
             dist = results[sid]["scenario_dist"]
-            exact_free = solve_exact_tsp(
-                nodes, E, dist, root, env,
-                fixed_arcs=[], fixed_edges_undir=[], output_flag=0,
-            )
-            pi_results[sid] = exact_free
+            if not skip_pi:
+                exact_free = solve_exact_tsp(
+                    nodes, E, dist, root, env,
+                    fixed_arcs=[], fixed_edges_undir=[], output_flag=0,
+                )
+                pi_results[sid] = exact_free
             ws = solve_reservation_tsp(
                 nodes, E, I, dist, root, p, C, env,
                 fixed_reservations=None, output_flag=0, model_name=f"ws_{sid}",
+                time_limit=ws_tl, mip_gap=(ws_gap if ws_gap > 0 else None),
             )
             ws_results[sid] = ws
             dt = time.time() - t_s
-            print(f"WS = {ws.get('total_cost')} | {dt:.1f}s")
+            info = ws.get("solver_info", {})
+            print(f"WS = {ws.get('total_cost')}  gap={info.get('mip_gap')}  status={info.get('status')} | {dt:.1f}s")
 
         _save("pi", {"pi_results": pi_results, "ws_results": ws_results})
         print(f"\nPI completato in {time.time()-t0:.1f}s")

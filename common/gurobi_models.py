@@ -1,3 +1,4 @@
+import os
 # -*- coding: utf-8 -*-
 import gurobipy as gp
 from gurobipy import GRB
@@ -78,7 +79,7 @@ def solve_exact_tsp(nodes, E, dist, root, env, fixed_arcs=None, fixed_edges_undi
 
     model = gp.Model("tsp", env=env)
     model.Params.OutputFlag = output_flag
-    model.Params.Threads = 1
+    model.Params.Threads = int(os.environ.get("TESI_GRB_THREADS", "1"))
     model.Params.Seed = 42
     # NOTA: time_limit/mip_gap sono opzionali (default None = comportamento esatto invariato).
     # Servono per la calibrazione, dove basta un tour buono, non l'ottimo.
@@ -130,7 +131,7 @@ def solve_reservation_tsp(nodes, E, I, dist, root, p, C, env,
                           model_name="reservation_tsp", time_limit=None, mip_gap=None):
     model = gp.Model(model_name, env=env)
     model.Params.OutputFlag = output_flag
-    model.Params.Threads = 1
+    model.Params.Threads = int(os.environ.get("TESI_GRB_THREADS", "1"))
     model.Params.Seed = 42
     if time_limit is not None:
         model.Params.TimeLimit = time_limit
@@ -226,6 +227,12 @@ def solve_reservation_tsp(nodes, E, I, dist, root, p, C, env,
         "reserved_used_directed": reserved_used_directed,
         "reserved_not_used": reserved_not_used,
         "used_unreserved_directed": used_unreserved_directed,
+        "solver_info": {
+            "status": status_map.get(model.Status, str(model.Status)),
+            "mip_gap": safe_gurobi_attr(model, "MIPGap"),
+            "obj_bound": safe_gurobi_attr(model, "ObjBound"),
+            "runtime": safe_gurobi_attr(model, "Runtime"),
+        },
     }
 
 def safe_gurobi_attr(model, attr_name, default=None):
@@ -244,7 +251,7 @@ def solve_stochastic(nodes, E, I, b, root, p, C, env, scenario_deltas, scenario_
     model.Params.OutputFlag = 1
     model.Params.TimeLimit  = STO_TIME_LIMIT
     model.Params.MIPGap     = STO_MIP_GAP
-    model.Params.Threads = 1
+    model.Params.Threads = int(os.environ.get("TESI_GRB_THREADS", "1"))
     model.Params.Seed = 42
     n = len(nodes)
 

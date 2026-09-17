@@ -394,3 +394,9 @@ DRONE_U  = _env_float("TESI_DRONE_U", 12.0)   # ground speed nominale [m/s] (ove
 DRONE_A0 = 168.49        # W
 DRONE_A2 = 1.66375e-2    # W s^2 m^-2
 DRONE_A3 = 9.242625e-3   # W s^3 m^-3
+
+# Campionamento del campo di vento lungo ogni arco: numero di punti
+# proporzionale alla lunghezza dell'arco in celle ERA5 (floor + cap).
+WIND_SAMPLES_PER_CELL = _env_float("TESI_WIND_SAMPLES_PER_CELL", 4.0)
+WIND_SAMPLES_MIN      = _env_int("TESI_WIND_SAMPLES_MIN", 2)
+WIND_SAMPLES_MAX      = _env_int("TESI_WIND_SAMPLES_MAX", 400)

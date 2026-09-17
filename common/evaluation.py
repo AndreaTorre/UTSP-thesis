@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import math
+import os
 import numpy as np
 import random
 import matplotlib
@@ -152,6 +153,13 @@ def format_random_edge_usage_lines(stats, title):
     return out
 
 def compute_eev_medione(nodes, E, root, env, base_dist, I, p, C, results, scenario_ids, return_solutions=False):
+    # Cap sui MIP dell'EEV (a 40 nodi il reservation-TSP puo' non chiudere).
+    # Default None = comportamento esatto invariato (15/25).
+    _eev_tl = os.environ.get("TESI_STO_TIME_LIMIT")
+    _eev_gap = os.environ.get("TESI_STO_MIP_GAP")
+    _eev_tl = float(_eev_tl) if _eev_tl else None
+    _eev_gap = float(_eev_gap) if _eev_gap else None
+    _eev_of = 1 if os.environ.get("TESI_EEV_VERBOSE") else 0
     # 1: distanza media sui 4 scenari
     all_deltas = [results[s]["pert"] for s in scenario_ids]
     dist_media = {
@@ -166,8 +174,9 @@ def compute_eev_medione(nodes, E, root, env, base_dist, I, p, C, results, scenar
     # Da qui estraggo x^EV, cioè le prenotazioni decise con informazione media.
     mean_solution = solve_reservation_tsp(
         nodes, E, I, dist_media, root, p, C, env,
-        fixed_reservations=None, output_flag=0,
-        model_name="eev_medione"
+        fixed_reservations=None, output_flag=_eev_of,
+        model_name="eev_medione",
+        time_limit=_eev_tl, mip_gap=_eev_gap
     )
 
     tour_medio = mean_solution["tour"]
@@ -188,8 +197,9 @@ def compute_eev_medione(nodes, E, root, env, base_dist, I, p, C, results, scenar
 
         second_stage = solve_reservation_tsp(
             nodes, E, I, scenario_dist, root, p, C, env,
-            fixed_reservations=list(x_ev), output_flag=0,
-            model_name=f"eev_secondostadio_{sid}"
+            fixed_reservations=list(x_ev), output_flag=_eev_of,
+            model_name=f"eev_secondostadio_{sid}",
+            time_limit=_eev_tl, mip_gap=_eev_gap
         )
 
         if second_stage["tour_cost"] is not None:
