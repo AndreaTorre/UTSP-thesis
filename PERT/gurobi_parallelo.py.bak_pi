@@ -315,26 +315,18 @@ def fase_assemble():
     scenario_probs = s["scenario_probs"]
     I = s["I"]; b = s["b"]; p = s["p"]; C = s["C"]
 
-    # Inserisci i risultati PI e WS dentro results.
-    # PI (exact_free) e' OPZIONALE: se il WS ha girato con TESI_SKIP_PI=1, pi_results
-    # e' vuoto. Il PI serve solo alla regola diagnostica f^PI, non a WS/STO/EEV.
-    _pi_res = pi.get("pi_results", {}) or {}
-    _have_pi = len(_pi_res) > 0
+    # Inserisci i risultati PI e WS dentro results
     for sid in scenario_ids:
-        if _have_pi and sid in _pi_res:
-            results[sid]["exact_free"] = _pi_res[sid]
+        results[sid]["exact_free"] = pi["pi_results"][sid]
         results[sid]["ws"] = pi["ws_results"][sid]
 
-    if _have_pi:
-        pi_lengths = [
-            results[sid]["exact_free"]["length"]
-            for sid in scenario_ids
-            if results[sid].get("exact_free") and results[sid]["exact_free"]["length"] is not None
-        ]
-        PI = sum(pi_lengths) / len(scenario_ids) if pi_lengths else None
-    else:
-        PI = None
-        print("  [assemble] PI assente (WS con skip_pi): salto la regola f^PI, benchmark WS/STO/EEV OK.")
+    # PI (TSP libero): resta solo per gli archi frequenti / regola f^PI.
+    pi_lengths = [
+        results[sid]["exact_free"]["length"]
+        for sid in scenario_ids
+        if results[sid]["exact_free"]["length"] is not None
+    ]
+    PI = sum(pi_lengths) / len(scenario_ids)
 
     # WS (wait-and-see): bound di informazione perfetta, pesato sugli scenari.
     ws_costs = {sid: pi["ws_results"][sid].get("total_cost") for sid in scenario_ids}
